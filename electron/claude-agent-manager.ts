@@ -517,7 +517,27 @@ export class ClaudeAgentManager {
 
         if (message.type === 'stream_event') {
           // Partial streaming content
-          const event = message.event as { type?: string; delta?: { text?: string; thinking?: string }; content_block?: { type?: string; id?: string; name?: string; input?: string } }
+          const event = message.event as {
+            type?: string
+            delta?: { text?: string; thinking?: string }
+            content_block?: { type?: string; id?: string; name?: string; input?: string }
+            usage?: { input_tokens?: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number; output_tokens?: number }
+            message?: { usage?: { input_tokens?: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number; output_tokens?: number } }
+          }
+          // Track context usage from message_start and message_delta (includes cached tokens)
+          const eventUsage = event.usage || event.message?.usage
+          if (eventUsage && (event.type === 'message_delta' || event.type === 'message_start') && !message.parent_tool_use_id) {
+            const contextTokens = (eventUsage.input_tokens || 0)
+              + (eventUsage.cache_creation_input_tokens || 0)
+              + (eventUsage.cache_read_input_tokens || 0)
+            if (contextTokens > session.metadata.inputTokens) {
+              session.metadata.inputTokens = contextTokens
+            }
+            if (eventUsage.output_tokens && eventUsage.output_tokens > session.metadata.outputTokens) {
+              session.metadata.outputTokens = eventUsage.output_tokens
+            }
+            this.send('claude:status', sessionId, { ...session.metadata })
+          }
           if (event.type === 'content_block_delta') {
             if (event.delta?.text) {
               this.send('claude:stream', sessionId, {
