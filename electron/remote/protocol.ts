@@ -22,6 +22,7 @@ export const PROXIED_CHANNELS = new Set([
   'claude:list-sessions', 'claude:resume-session', 'claude:rest-session',
   'claude:wake-session', 'claude:is-resting',
   'claude:archive-messages', 'claude:load-archived', 'claude:clear-archive',
+  'claude:get-usage',
   // Workspace
   'workspace:save', 'workspace:load',
   // Settings

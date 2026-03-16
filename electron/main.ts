@@ -389,6 +389,39 @@ function registerProxiedHandlers() {
     return true
   })
 
+  // Claude usage (5h / 7d rate limits)
+  registerHandler('claude:get-usage', async () => {
+    try {
+      if (process.platform !== 'darwin') return null
+      const { execSync } = await import('child_process')
+      const username = execSync('whoami', { encoding: 'utf-8' }).trim()
+      const raw = execSync(
+        `security find-generic-password -s "Claude Code-credentials" -a "${username}" -w 2>/dev/null`,
+        { encoding: 'utf-8', timeout: 3000 }
+      ).trim()
+      const creds = JSON.parse(raw)
+      const token = creds?.claudeAiOauth?.accessToken
+      if (!token || !token.startsWith('sk-ant-oat')) return null
+
+      const res = await fetch('https://api.anthropic.com/api/oauth/usage', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'anthropic-beta': 'oauth-2025-04-20',
+          'User-Agent': 'claude-code/2.0.32',
+          'Accept': 'application/json',
+        },
+      })
+      if (!res.ok) return null
+      const data = await res.json()
+      return {
+        fiveHour: data.five_hour?.utilization ?? null,
+        sevenDay: data.seven_day?.utilization ?? null,
+        fiveHourReset: data.five_hour?.resets_at ?? null,
+        sevenDayReset: data.seven_day?.resets_at ?? null,
+      }
+    } catch { return null }
+  })
+
   // Git
   registerHandler('git:get-github-url', async (folderPath: string) => {
     try {

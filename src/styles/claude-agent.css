@@ -1497,6 +1497,13 @@
   text-decoration: underline;
 }
 
+.claude-usage-mid {
+  color: #e6a700;
+}
+.claude-usage-high {
+  color: #e05252;
+}
+
 /* ============================================
    Prompt History Modal
    ============================================ */

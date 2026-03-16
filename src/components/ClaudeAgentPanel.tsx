@@ -90,6 +90,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
   const [currentModel, setCurrentModel] = useState<string>('')
   const [effortLevel, setEffortLevel] = useState<string>('high')
   const [enable1MContext, setEnable1MContext] = useState(false)
+  const [claudeUsage, setClaudeUsage] = useState<{ fiveHour: number | null; sevenDay: number | null; fiveHourReset: string | null; sevenDayReset: string | null } | null>(null)
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([])
   const [pendingPermission, setPendingPermission] = useState<PendingPermission | null>(null)
   const [permissionFocus, setPermissionFocus] = useState(0) // 0=Yes, 1=Yes always, 2=No, 3=custom text
@@ -556,6 +557,16 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
   useEffect(() => {
     window.electronAPI.git.getBranch(cwd).then(branch => setGitBranch(branch)).catch(() => setGitBranch(null))
   }, [cwd])
+
+  // Poll Claude usage (5h / 7d rate limits) every 5 minutes
+  useEffect(() => {
+    const fetchUsage = () => {
+      window.electronAPI.claude.getUsage().then(u => { if (u) setClaudeUsage(u) }).catch(() => {})
+    }
+    fetchUsage()
+    const timer = setInterval(fetchUsage, 5 * 60 * 1000)
+    return () => clearInterval(timer)
+  }, [])
 
   // File picker: debounced search
   useEffect(() => {
@@ -2354,6 +2365,14 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
           )}
           {sessionMeta && sessionMeta.totalCost > 0 && (
             <span className="claude-statusline-item">${sessionMeta.totalCost.toFixed(4)}</span>
+          )}
+          {claudeUsage && claudeUsage.fiveHour != null && (
+            <span
+              className={`claude-statusline-item${claudeUsage.fiveHour > 80 ? ' claude-usage-high' : claudeUsage.fiveHour > 50 ? ' claude-usage-mid' : ''}`}
+              title={`5h resets: ${claudeUsage.fiveHourReset ? new Date(claudeUsage.fiveHourReset).toLocaleTimeString() : '?'}\n7d resets: ${claudeUsage.sevenDayReset ? new Date(claudeUsage.sevenDayReset).toLocaleString() : '?'}`}
+            >
+              5h:{Math.round(claudeUsage.fiveHour)}% 7d:{Math.round(claudeUsage.sevenDay ?? 0)}%
+            </span>
           )}
         </div>
         <div className="claude-statusline">
