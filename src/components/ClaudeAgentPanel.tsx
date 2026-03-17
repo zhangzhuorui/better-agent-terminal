@@ -1,8 +1,9 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from 'react'
 import type { ClaudeMessage, ClaudeToolCall } from '../types/claude-agent'
 import { isToolCall } from '../types/claude-agent'
 import { settingsStore } from '../stores/settings-store'
 import { workspaceStore } from '../stores/workspace-store'
+import type { AgentPresetId } from '../types/agent-presets'
 import { LinkedText, FilePreviewModal } from './PathLinker'
 
 interface SessionMeta {
@@ -86,6 +87,10 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set())
   const [autoExpandThinking, setAutoExpandThinking] = useState(false)
   const [sessionMeta, setSessionMeta] = useState<SessionMeta | null>(null)
+  const [hasSdkSession, setHasSdkSession] = useState(() => {
+    const t = workspaceStore.getState().terminals.find(t => t.id === sessionId)
+    return !!t?.sdkSessionId
+  })
   const [permissionMode, setPermissionMode] = useState<string>('bypassPermissions')
   const [currentModel, setCurrentModel] = useState<string>('')
   const [effortLevel, setEffortLevel] = useState<string>('high')
@@ -137,6 +142,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
   const inputHistoryIndexRef = useRef(-1)
   const inputDraftRef = useRef('')
   const initialModeAppliedRef = useRef(false)
+  const pendingPromptSentRef = useRef(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const streamingThinkingRef = useRef<HTMLPreElement>(null)
   const messagesContainerRef = useRef<HTMLDivElement>(null)
@@ -322,7 +328,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
   useEffect(() => {
     const api = window.electronAPI.claude
     const tag = `[Claude:${sessionId.slice(0, 8)}]`
-    console.log(`${tag} subscribing to IPC events`)
+    window.electronAPI?.debug?.log(`${tag} subscribing to IPC events`)
 
     const unsubs = [
       api.onMessage((sid: string, msg: unknown) => {
@@ -336,6 +342,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
         // On restart, sys-init message arrives again — reset messages
         // But skip reset if history will be loaded (resume flow)
         if (message.id === `sys-init-${sessionId}`) {
+          window.electronAPI?.debug?.log(`${tag} sys-init historyLoaded=${historyLoadedRef.current}`)
           if (!historyLoadedRef.current) {
             setMessages([message])
             // Clear archive on fresh session start
@@ -437,11 +444,12 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
       }),
 
       api.onStatus((sid: string, meta: unknown) => {
+        const dlog = (...args: unknown[]) => window.electronAPI?.debug?.log(...args)
         if (sid !== sessionId) {
-          console.log(`${tag} SKIP onStatus sid=${sid.slice(0, 8)} (mine=${sessionId.slice(0, 8)})`)
+          dlog(`${tag} SKIP onStatus sid=${sid.slice(0, 8)} (mine=${sessionId.slice(0, 8)})`)
           return
         }
-        console.log(`${tag} onStatus sdkSessionId=${((meta as SessionMeta).sdkSessionId || '').slice(0, 8)}`)
+        dlog(`${tag} onStatus sdkSessionId=${((meta as SessionMeta).sdkSessionId || '').slice(0, 8)}`)
         const m = meta as SessionMeta
         setSessionMeta(m)
         if (m.model) setCurrentModel(prev => prev || m.model!)
@@ -454,6 +462,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
         }
         // Persist SDK session ID per-terminal so /resume and auto-resume can find it
         if (m.sdkSessionId) {
+          setHasSdkSession(true)
           workspaceStore.setTerminalSdkSessionId(sessionId, m.sdkSessionId)
         }
       }),
@@ -477,10 +486,11 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
           console.log(`${tag} SKIP onHistory sid=${sid.slice(0, 8)} items=${(items as unknown[]).length} (mine=${sessionId.slice(0, 8)})`)
           return
         }
-        console.log(`${tag} onHistory items=${(items as unknown[]).length}`)
+        const dlog2 = (...args: unknown[]) => window.electronAPI?.debug?.log(...args)
+        dlog2(`${tag} onHistory items=${(items as unknown[]).length} pendingPromptSent=${pendingPromptSentRef.current}`)
         historyLoadedRef.current = true
         // Replace messages with the full history batch and clear archive state
-        setMessages(items as MessageItem[])
+        const historyItems = items as MessageItem[]
         setLoadedArchive([])
         archivedCountRef.current = 0
         loadedFromArchiveRef.current = 0
@@ -488,8 +498,29 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
         window.electronAPI.claude.clearArchive(sessionId).catch(() => {})
         setStreamingText('')
         setStreamingThinking('')
-        // Reset the flag after a tick so future restarts work normally
-        setTimeout(() => { historyLoadedRef.current = false }, 100)
+
+        // Auto-send pending prompt from fork AFTER history is loaded
+        const t = workspaceStore.getState().terminals.find(t => t.id === sessionId)
+        if (!pendingPromptSentRef.current && (t?.pendingPrompt || t?.pendingImages?.length)) {
+          pendingPromptSentRef.current = true
+          const prompt = t.pendingPrompt || ''
+          const images = t.pendingImages
+          workspaceStore.setTerminalPendingPrompt(sessionId, '')
+          window.electronAPI?.debug?.log(`${tag} onHistory AUTO-SENDING pending prompt: "${prompt}" images=${images?.length ?? 0}`)
+          // Set history + user message together so it doesn't get overwritten
+          setMessages([...historyItems, {
+            id: `user-fork-${Date.now()}`,
+            sessionId,
+            role: 'user' as const,
+            content: prompt,
+            timestamp: Date.now(),
+          }])
+          setIsStreaming(true)
+          window.electronAPI.claude.sendMessage(sessionId, prompt, images)
+        } else {
+          dlog2(`${tag} onHistory setting messages (history only, no pending prompt)`)
+          setMessages(historyItems)
+        }
       }),
 
       api.onModeChange((sid: string, mode: string) => {
@@ -519,6 +550,8 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
   // If a saved sdkSessionId exists (from a previous /resume), auto-resume that session
   useEffect(() => {
     const stag = `[Claude:${sessionId.slice(0, 8)}]`
+    const dlog = (...args: unknown[]) => window.electronAPI?.debug?.log(...args)
+    dlog(`${stag} mount effect: startedRef=${sessionStartedRef.current} inSet=${startedSessions.has(sessionId)}`)
     if (!sessionStartedRef.current && !startedSessions.has(sessionId)) {
       sessionStartedRef.current = true
       startedSessions.add(sessionId)
@@ -526,16 +559,17 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
       const terminal = workspaceStore.getState().terminals.find(t => t.id === sessionId)
       const savedSdkSessionId = terminal?.sdkSessionId
       const savedModel = terminal?.model
+      dlog(`${stag} sdkSessionId=${savedSdkSessionId?.slice(0, 8)} pendingPrompt="${terminal?.pendingPrompt || ''}"`)
 
       // Restore saved model to UI
       if (savedModel) setCurrentModel(savedModel)
 
       if (savedSdkSessionId) {
-        console.log(`${stag} AUTO-RESUME sdkSessionId=${savedSdkSessionId.slice(0, 8)}`)
+        dlog(`${stag} AUTO-RESUME sdkSessionId=${savedSdkSessionId.slice(0, 8)}`)
         historyLoadedRef.current = true
         window.electronAPI.claude.resumeSession(sessionId, savedSdkSessionId, cwd, savedModel)
       } else {
-        console.log(`${stag} FRESH startSession`)
+        dlog(`${stag} FRESH startSession`)
         window.electronAPI.claude.startSession(sessionId, { cwd, permissionMode: 'bypassPermissions', model: savedModel })
       }
     }
@@ -650,6 +684,42 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
     await window.electronAPI.claude.resumeSession(sessionId, sdkSessionId, cwd)
     workspaceStore.setTerminalSdkSessionId(sessionId, sdkSessionId)
   }, [sessionId, cwd])
+
+  const handleForkSession = useCallback(async () => {
+    const dlog = (...args: unknown[]) => window.electronAPI?.debug?.log(...args)
+    const tag = `[Fork:${sessionId.slice(0, 8)}]`
+    dlog(`${tag} start hasSdkSession=${hasSdkSession} workspaceId=${workspaceId}`)
+    if (!hasSdkSession || !workspaceId) return
+    const result = await window.electronAPI.claude.forkSession(sessionId)
+    dlog(`${tag} forkSession result=`, result)
+    if (!result?.newSdkSessionId) return
+
+    const prompt = inputValueRef.current.trim()
+    const images = attachedImages.map(img => img.dataUrl)
+    dlog(`${tag} prompt="${prompt}" images=${images.length}`)
+    if (prompt || images.length > 0) {
+      inputValueRef.current = ''
+      if (textareaRef.current) textareaRef.current.value = ''
+      setAttachedImages([])
+    }
+
+    const newTerminal = workspaceStore.addTerminal(workspaceId, 'claude-code' as AgentPresetId)
+    dlog(`${tag} newTerminal=${newTerminal.id.slice(0, 8)}`)
+    workspaceStore.setTerminalSdkSessionId(newTerminal.id, result.newSdkSessionId)
+    if (currentModel) {
+      workspaceStore.updateTerminalModel(newTerminal.id, currentModel)
+    }
+    if (prompt || images.length > 0) {
+      workspaceStore.setTerminalPendingPrompt(newTerminal.id, prompt, images.length > 0 ? images : undefined)
+      dlog(`${tag} set pendingPrompt on ${newTerminal.id.slice(0, 8)}: "${prompt}" images=${images.length}`)
+    }
+    workspaceStore.setFocusedTerminal(newTerminal.id)
+    workspaceStore.save()
+
+    // Verify store state
+    const stored = workspaceStore.getState().terminals.find(t => t.id === newTerminal.id)
+    dlog(`${tag} stored terminal: sdkSessionId=${stored?.sdkSessionId?.slice(0, 8)} pendingPrompt="${stored?.pendingPrompt}" pendingImages=${stored?.pendingImages?.length ?? 0}`)
+  }, [sessionId, workspaceId, hasSdkSession, currentModel, attachedImages])
 
   const clearInput = useCallback(() => {
     inputValueRef.current = ''
@@ -1886,7 +1956,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
               <span>{formatTimestamp(item.timestamp || 0)}</span>
             </div>
           ) : null
-          return <>{divider}{renderMessage(item, i)}</>
+          return <Fragment key={item.id || `msg-${i}`}>{divider}{renderMessage(item, i)}</Fragment>
         })}
         {isStreaming && !streamingText && !streamingThinking && (
           <div className="tl-item">
@@ -2301,6 +2371,15 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
           </div>
 
           <div className="claude-input-actions">
+            {hasSdkSession && (
+              <button
+                className="claude-fork-btn"
+                onClick={handleForkSession}
+                title="Fork: create a new tab from current conversation"
+              >
+                用目前進度分支 <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style={{verticalAlign: '-1px', marginLeft: '2px'}}><circle cx="5" cy="3" r="1.5"/><circle cx="11" cy="3" r="1.5"/><circle cx="5" cy="13" r="1.5"/><path d="M5 4.5V11.5M5 7C5 7 5 5 8 5S11 4.5 11 4.5" fill="none" stroke="currentColor" strokeWidth="1.5"/></svg>
+              </button>
+            )}
             <span
               className="claude-status-btn"
               onClick={handleSelectImages}

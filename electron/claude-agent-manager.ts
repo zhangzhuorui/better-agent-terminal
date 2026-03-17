@@ -116,6 +116,8 @@ interface SessionInstance {
 // Persists SDK session IDs across stop/restart so we can resume conversations
 const sdkSessionIds = new Map<string, string>()
 
+let forkSessionFn: typeof import('@anthropic-ai/claude-agent-sdk').forkSession | null = null
+
 export class ClaudeAgentManager {
   private sessions: Map<string, SessionInstance> = new Map()
   private getWindows: () => BrowserWindow[]
@@ -427,6 +429,7 @@ export class ClaudeAgentManager {
           session.metadata.model = initMsg.model
           session.metadata.sdkSessionId = initMsg.session_id
           session.metadata.cwd = initMsg.cwd || session.cwd
+          logger.log(`[claude:status] EMIT sessionId=${sessionId.slice(0, 8)} sdkSessionId=${session.metadata.sdkSessionId?.slice(0, 8)}`)
           this.send('claude:status', sessionId, {
             ...session.metadata,
             permissionMode: initMsg.permissionMode || 'default',
@@ -1103,13 +1106,8 @@ export class ClaudeAgentManager {
 
     // Store the SDK session ID so startSession will use it for resume
     sdkSessionIds.set(sessionId, sdkSessionIdToResume)
-    const result = await this.startSession(sessionId, { cwd, sdkSessionId: sdkSessionIdToResume, model })
-
-    // Load and replay historical messages from the JSONL file
-    if (result) {
-      await this.loadSessionHistory(sessionId, sdkSessionIdToResume, cwd)
-    }
-
+    // startSession already calls loadSessionHistory when sdkSessionId is provided
+    const result = await this.startSession(sessionId, { cwd, sdkSessionId: sdkSessionIdToResume, model, permissionMode: 'bypassPermissions' })
     return result
   }
 
@@ -1173,6 +1171,20 @@ export class ClaudeAgentManager {
 
   isResting(sessionId: string): boolean {
     return this.sessions.get(sessionId)?.isResting ?? false
+  }
+
+  async forkSession(sessionId: string): Promise<{ newSdkSessionId: string } | null> {
+    const session = this.sessions.get(sessionId)
+    const currentSdkId = session?.sdkSessionId || sdkSessionIds.get(sessionId)
+    if (!currentSdkId) return null
+
+    const cwd = session?.cwd
+    if (!forkSessionFn) {
+      const sdk = await import('@anthropic-ai/claude-agent-sdk')
+      forkSessionFn = sdk.forkSession
+    }
+    const result = await forkSessionFn(currentSdkId, { dir: cwd })
+    return { newSdkSessionId: result.sessionId }
   }
 
   dispose() {

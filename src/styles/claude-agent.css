@@ -974,6 +974,23 @@
   cursor: default;
 }
 
+.claude-fork-btn {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 2px 10px;
+  font-size: calc(var(--claude-font-size) - 2px);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+.claude-fork-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
+}
+
 .claude-send-btn {
   background: var(--claude-accent);
   color: #fff;
