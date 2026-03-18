@@ -109,6 +109,7 @@
   max-width: 300px;
   min-height: 40px;
   flex: 1;
+  align-self: stretch;
   background: var(--glass-bg);
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-md);
@@ -170,6 +171,7 @@
 .thumbnail-drag-wrapper {
   position: relative;
   flex-shrink: 0;
+  display: flex;
 }
 
 .thumbnail-drag-wrapper.dragging {
