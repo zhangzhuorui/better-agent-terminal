@@ -608,13 +608,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
 
       api.onModeChange((sid: string, mode: string) => {
         if (sid !== sessionId) return
-        // When exiting plan mode, restore to bypass
-        if (mode === 'default') {
-          setPermissionMode('bypassPermissions')
-          window.electronAPI.claude.setPermissionMode(sessionId, 'bypassPermissions')
-        } else {
-          setPermissionMode(mode)
-        }
+        setPermissionMode(mode)
       }),
 
       api.onPromptSuggestion((sid: string, suggestion: string) => {
@@ -1073,27 +1067,55 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
     await window.electronAPI.claude.set1MContext(sessionId, next)
   }, [sessionId, enable1MContext])
 
-  const PERMISSION_OPTION_COUNT = 4 // 0=Yes, 1=Yes always, 2=No, 3=custom text
+  const showDontAskAgain = (pendingPermission?.suggestions?.length ?? 0) > 0
+    || pendingPermission?.toolName === 'ExitPlanMode'
+
+  const dontAskAgainLabel = useMemo(() => {
+    if (!pendingPermission?.suggestions?.length) return "Yes, don't ask again for this session"
+    const suggestion = pendingPermission.suggestions[0] as { type?: string; rules?: { toolName?: string; ruleContent?: string }[] }
+    if (suggestion.type === 'addRules' && suggestion.rules?.length) {
+      const descriptions = suggestion.rules.map(r => {
+        const cmd = r.ruleContent?.split(':')[0] ?? r.ruleContent
+        return cmd
+      })
+      return `Yes, and don't ask again for ${descriptions.join(' and ')} commands`
+    }
+    return "Yes, don't ask again for this session"
+  }, [pendingPermission])
+  const PERMISSION_OPTION_COUNT = showDontAskAgain ? 4 : 3 // with don't-ask-again: 0=Yes, 1=Yes always, 2=No, 3=custom; without: 0=Yes, 1=No, 2=custom
 
   const handlePermissionSelect = useCallback((index?: number) => {
     if (!pendingPermission) return
     const choice = index ?? permissionFocus
-    if (choice === 0) {
-      // Yes — allow once
+    // Map index to action based on whether "don't ask again" is shown
+    // With don't-ask-again:    0=Yes, 1=Don't ask again, 2=No, 3=Custom
+    // Without don't-ask-again: 0=Yes, 1=No, 2=Custom
+    const action = showDontAskAgain
+      ? (['yes', 'dontAskAgain', 'no', 'custom'] as const)[choice]
+      : (['yes', 'no', 'custom'] as const)[choice]
+
+    if (action === 'yes') {
       window.electronAPI.claude.resolvePermission(sessionId, pendingPermission.toolUseId, {
         behavior: 'allow',
         updatedInput: pendingPermission.input,
       })
       setPendingPermission(null)
-    } else if (choice === 1) {
-      // Yes, always for this session
-      window.electronAPI.claude.resolvePermission(sessionId, pendingPermission.toolUseId, {
-        behavior: 'allow',
-        updatedInput: pendingPermission.input,
-      })
+    } else if (action === 'dontAskAgain') {
+      if (pendingPermission.toolName === 'ExitPlanMode') {
+        window.electronAPI.claude.resolvePermission(sessionId, pendingPermission.toolUseId, {
+          behavior: 'allow',
+          updatedInput: pendingPermission.input,
+          dontAskAgain: true,
+        })
+      } else {
+        window.electronAPI.claude.resolvePermission(sessionId, pendingPermission.toolUseId, {
+          behavior: 'allow',
+          updatedInput: pendingPermission.input,
+          updatedPermissions: pendingPermission.suggestions,
+        })
+      }
       setPendingPermission(null)
-    } else if (choice === 2) {
-      // No — use the same message as VS Code CLI
+    } else if (action === 'no') {
       const toolId = pendingPermission.toolUseId
       setMessages(prev => prev.map(m => {
         if ('toolName' in m && m.id === toolId) {
@@ -1106,11 +1128,9 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
         message: "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.",
       })
       setPendingPermission(null)
-    } else if (choice === 3) {
-      // Custom text — deny with reason message
+    } else if (action === 'custom') {
       const msg = permissionCustomText.trim()
       if (!msg) return // don't submit empty
-      // Update the tool call in messages to show the deny reason
       const toolId = pendingPermission.toolUseId
       setMessages(prev => prev.map(m => {
         if ('toolName' in m && m.id === toolId) {
@@ -1125,7 +1145,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
       setPendingPermission(null)
       setPermissionCustomText('')
     }
-  }, [sessionId, pendingPermission, permissionFocus, permissionCustomText])
+  }, [sessionId, pendingPermission, permissionFocus, permissionCustomText, showDontAskAgain])
 
   // Read plan file content when ExitPlanMode permission appears
   useEffect(() => {
@@ -2178,26 +2198,28 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
               <span className="claude-permission-option-num">1</span>
               <span className="claude-permission-option-label">Yes</span>
             </div>
+            {showDontAskAgain && (
+              <div
+                className={`claude-permission-option ${permissionFocus === 1 ? 'focused' : ''}`}
+                onClick={() => handlePermissionSelect(1)}
+                onMouseEnter={() => setPermissionFocus(1)}
+              >
+                <span className="claude-permission-option-num">2</span>
+                <span className="claude-permission-option-label">{dontAskAgainLabel}</span>
+              </div>
+            )}
             <div
-              className={`claude-permission-option ${permissionFocus === 1 ? 'focused' : ''}`}
-              onClick={() => handlePermissionSelect(1)}
-              onMouseEnter={() => setPermissionFocus(1)}
+              className={`claude-permission-option ${permissionFocus === (showDontAskAgain ? 2 : 1) ? 'focused' : ''}`}
+              onClick={() => handlePermissionSelect(showDontAskAgain ? 2 : 1)}
+              onMouseEnter={() => setPermissionFocus(showDontAskAgain ? 2 : 1)}
             >
-              <span className="claude-permission-option-num">2</span>
-              <span className="claude-permission-option-label">Yes, don't ask again for this session</span>
-            </div>
-            <div
-              className={`claude-permission-option ${permissionFocus === 2 ? 'focused' : ''}`}
-              onClick={() => handlePermissionSelect(2)}
-              onMouseEnter={() => setPermissionFocus(2)}
-            >
-              <span className="claude-permission-option-num">3</span>
+              <span className="claude-permission-option-num">{showDontAskAgain ? 3 : 2}</span>
               <span className="claude-permission-option-label">No</span>
             </div>
             <div
-              className={`claude-permission-option custom ${permissionFocus === 3 ? 'focused' : ''}`}
-              onClick={() => { setPermissionFocus(3); permissionCustomRef.current?.focus() }}
-              onMouseEnter={() => setPermissionFocus(3)}
+              className={`claude-permission-option custom ${permissionFocus === (showDontAskAgain ? 3 : 2) ? 'focused' : ''}`}
+              onClick={() => { setPermissionFocus(showDontAskAgain ? 3 : 2); permissionCustomRef.current?.focus() }}
+              onMouseEnter={() => setPermissionFocus(showDontAskAgain ? 3 : 2)}
             >
               <input
                 ref={permissionCustomRef}
