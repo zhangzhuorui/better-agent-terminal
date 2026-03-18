@@ -291,6 +291,7 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 - **lmanchu** - [@lmanchu](https://github.com/lmanchu) - macOS/Linux support, workspace roles
 - **bluewings1211** - [@bluewings1211](https://github.com/bluewings1211) - Shift+Enter newline, preserve workspace state, font settings
+- **Henry Hu** - [@ninedter](https://github.com/ninedter) - Key API discovery and valuable architectural feedback
 
 ---
 
