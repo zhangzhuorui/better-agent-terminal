@@ -147,7 +147,6 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
   const inputHistoryRef = useRef<string[]>([])
   const inputHistoryIndexRef = useRef(-1)
   const inputDraftRef = useRef('')
-  const initialModeAppliedRef = useRef(false)
   const pendingPromptSentRef = useRef(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const streamingThinkingRef = useRef<HTMLPreElement>(null)
@@ -462,11 +461,8 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
         const m = meta as SessionMeta
         setSessionMeta(m)
         if (m.model) setCurrentModel(prev => prev || m.model!)
-        // On first status, ensure bypass mode is applied
-        if (!initialModeAppliedRef.current) {
-          initialModeAppliedRef.current = true
-          window.electronAPI.claude.setPermissionMode(sessionId, 'bypassPermissions')
-        } else if (m.permissionMode) {
+        // Sync UI with backend's current permission mode
+        if (m.permissionMode) {
           setPermissionMode(m.permissionMode)
         }
         // Persist SDK session ID per-terminal so /resume and auto-resume can find it
@@ -573,7 +569,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
         window.electronAPI.claude.resumeSession(sessionId, savedSdkSessionId, cwd, savedModel)
       } else {
         dlog(`${stag} FRESH startSession`)
-        window.electronAPI.claude.startSession(sessionId, { cwd, permissionMode: 'bypassPermissions', model: savedModel })
+        window.electronAPI.claude.startSession(sessionId, { cwd, permissionMode, model: savedModel })
       }
     }
     return () => {
