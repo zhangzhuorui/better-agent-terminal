@@ -4,12 +4,14 @@
 
 <img src="assets/icon.svg" width="128" height="128" alt="Better Agent Terminal">
 
-![Version](https://img.shields.io/badge/version-1.37.0-blue.svg)
+![Version](https://img.shields.io/badge/version-1.52.0-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%20|%20macOS%20|%20Linux-lightgrey.svg)
 ![Electron](https://img.shields.io/badge/electron-28.3.3-47848F.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
-**A cross-platform terminal aggregator with multi-workspace support and Claude Code integration**
+**A cross-platform terminal aggregator with multi-workspace support and built-in AI agent integration**
+
+Manage multiple project terminals in one window, with a built-in Claude Code agent panel, file browser, git viewer, snippet manager, and remote access — all in a single Electron app.
 
 [Download Latest Release](https://github.com/tony1223/better-agent-terminal/releases/latest)
 
@@ -28,35 +30,40 @@
 ## Features
 
 ### Workspace Management
-- **Multi-Workspace** — Organize terminals by project folders
-- **Drag & Drop** — Reorder workspaces freely
-- **Groups** — Categorize workspaces with filter dropdown
-- **Detachable Windows** — Pop out workspaces to separate windows, auto-reattach on restart
-- **Per-Workspace Env Vars** — Configure environment variables per workspace
-- **Activity Indicators** — See which workspaces have running terminals
-- **Double-click to rename**, right-click context menu for all actions
+- **Multi-Workspace** — Organize terminals by project folders; each workspace binds to a directory
+- **Drag & Drop** — Reorder workspaces freely in the sidebar
+- **Groups** — Categorize workspaces into named groups with a filter dropdown
+- **Profiles** — Save and switch between multiple workspace configurations (local or remote)
+- **Detachable Windows** — Pop out individual workspaces to separate windows; auto-reattach on restart
+- **Per-Workspace Env Vars** — Configure custom environment variables per workspace
+- **Activity Indicators** — Visual dots showing which workspaces have active terminal processes
+- **Double-click to rename**, right-click context menu for all workspace actions
 
 ### Terminal
-- **Google Meet-style layout** — 70% main panel + 30% thumbnail bar
-- **Multiple terminals per workspace** — xterm.js with full Unicode/CJK support
-- **Tab navigation** — Terminal / Files / Git views
-- **File browser** — Search, navigate, preview files with syntax highlighting
-- **Git integration** — Diff viewer, branch display, untracked files, GitHub link detection
-- **Snippet manager** — Save, organize, and paste code snippets
+- **Google Meet-style layout** — 70% main panel + 30% scrollable thumbnail bar showing all terminals
+- **Multiple terminals per workspace** — Powered by xterm.js with full Unicode/CJK support
+- **Agent presets** — Pre-configured terminal roles: Claude Code, Gemini CLI, Codex, GitHub Copilot, or plain terminal
+- **Tab navigation** — Switch between Terminal, Files, and Git views per workspace
+- **File browser** — Search, navigate, and preview files with syntax highlighting (highlight.js)
+- **Git integration** — Commit log, diff viewer, branch display, untracked file list, GitHub link detection
+- **Snippet manager** — Save, organize, search, and paste code snippets (SQLite-backed with categories and favorites)
 
 ### Claude Code Agent
-- **Built-in Claude Code** via SDK — no separate terminal needed
-- **Message streaming** with extended thinking (collapsible)
-- **Permission-based tool execution** with bypass mode
-- **Active tasks bar** — See running operations with elapsed time
-- **Session resume** — Persist and resume conversations across restarts
-- **Rest/Wake sessions** — Pause and resume agent sessions from context menu
-- **Statusline** — Token usage, cost, context window %, model, git branch, duration
-- **Prompt history** — View and copy all user prompts from statusline
-- **Image attachment** — Drag-drop or button (max 5 images)
-- **Clickable URLs** — Markdown links and bare URLs open in default browser
-- **Clickable file paths** — Preview files with syntax highlighting, search (Ctrl+F)
-- **Ctrl+P file picker** — Search and attach files to context
+- **Built-in Claude Code** via SDK — Runs the agent directly inside the app; no separate terminal needed
+- **Message streaming** with extended thinking blocks (collapsible)
+- **Permission-based tool execution** — Every tool call is intercepted; approve individually, or enable bypass/plan mode for auto-approval
+- **Subagent tracking** — See spawned subagent tasks with progress indicators and stall detection
+- **Session resume** — Persist conversations and resume them across app restarts
+- **Session fork** — Branch off from any point in a conversation
+- **Rest/Wake sessions** — Pause and resume agent sessions from the context menu to save resources
+- **Statusline** — Live display of token usage, cost, context window %, model name, git branch, turn count, and session duration
+- **Usage monitoring** — Track API rate limits (5-hour and 7-day windows) via Anthropic OAuth
+- **Prompt history** — View and copy all previous user prompts from the statusline
+- **Image attachment** — Drag-drop or use the attach button (up to 5 images per message)
+- **Clickable URLs** — Markdown links and bare URLs open in the default browser
+- **Clickable file paths** — Click any file path in agent output to preview it with syntax highlighting and search (Ctrl+F)
+- **Ctrl+P file picker** — Fuzzy-search project files and attach them to the conversation context
+- **Update notifications** — Automatic check for new releases on GitHub
 
 ---
 
@@ -64,21 +71,21 @@
 
 | Shortcut | Action |
 |---|---|
-| `Ctrl+P` / `Cmd+P` | File picker (search & attach files) |
+| `Ctrl+P` / `Cmd+P` | File picker (search & attach files to agent context) |
 | `Shift+Tab` | Switch between Terminal and Agent mode |
 | `Enter` | Send message |
 | `Shift+Enter` | Insert newline (multiline input) |
 | `Escape` | Stop streaming / close modal |
 | `Ctrl+Shift+C` | Copy selected text |
 | `Ctrl+Shift+V` | Paste from clipboard |
-| `Right-click` | Copy (if selected) or Paste |
+| `Right-click` | Copy (if text selected) or Paste |
 
 ## Slash Commands
 
 | Command | Description |
 |---|---|
-| `/resume` | Resume a previous Claude session |
-| `/model` | Switch between available models |
+| `/resume` | Resume a previous Claude session from history |
+| `/model` | Switch between available Claude models |
 
 ---
 
@@ -146,30 +153,55 @@ npm run build    # Build .dmg
 
 ```
 better-agent-terminal/
-├── electron/
-│   ├── main.ts                 # Electron main process, window management
-│   ├── preload.ts              # IPC bridge
-│   ├── pty-manager.ts          # PTY process management (multi-window broadcast)
-│   └── claude-agent-manager.ts # Claude SDK session management
-├── src/
+├── electron/                          # Main process (Node.js)
+│   ├── main.ts                        # App entry, IPC handlers, window management
+│   ├── preload.ts                     # Context bridge (window.electronAPI)
+│   ├── pty-manager.ts                 # PTY process lifecycle, multi-window broadcast
+│   ├── claude-agent-manager.ts        # Claude SDK session management
+│   ├── logger.ts                      # Disk-based logger (enable with BAT_DEBUG=1)
+│   ├── snippet-db.ts                  # SQLite snippet storage
+│   ├── profile-manager.ts            # Profile CRUD and persistence
+│   ├── update-checker.ts             # GitHub release update check
+│   └── remote/
+│       ├── protocol.ts                # Proxied channel/event definitions
+│       ├── handler-registry.ts        # Unified IPC + remote handler registry
+│       ├── broadcast-hub.ts           # Event broadcasting to remote clients
+│       ├── remote-server.ts           # WebSocket server (host mode)
+│       ├── remote-client.ts           # WebSocket client (connect mode)
+│       └── tunnel-manager.ts          # IP detection, Tailscale, QR code info
+├── src/                               # Renderer process (React)
+│   ├── App.tsx                        # Root component, layout, profile orchestration
 │   ├── components/
-│   │   ├── Sidebar.tsx         # Workspace list, groups, context menu
-│   │   ├── WorkspaceView.tsx   # Main workspace container
-│   │   ├── ClaudeAgentPanel.tsx# Claude Code agent UI
-│   │   ├── TerminalPanel.tsx   # xterm.js terminal
-│   │   ├── ThumbnailBar.tsx    # Terminal thumbnail list
-│   │   ├── PathLinker.tsx      # Clickable paths & URLs, file preview modal
-│   │   └── SnippetSidebar.tsx  # Snippet manager
+│   │   ├── Sidebar.tsx                # Workspace list, groups, drag-drop, context menu
+│   │   ├── WorkspaceView.tsx          # Per-workspace container
+│   │   ├── ClaudeAgentPanel.tsx       # Claude agent chat UI and streaming
+│   │   ├── TerminalPanel.tsx          # xterm.js terminal wrapper
+│   │   ├── ThumbnailBar.tsx           # Scrollable terminal thumbnail strip
+│   │   ├── MainPanel.tsx              # Tab container (Terminal / Files / Git)
+│   │   ├── GitPanel.tsx               # Git log, diff, status viewer
+│   │   ├── FileTree.tsx               # In-app file browser
+│   │   ├── PathLinker.tsx             # Clickable file paths & URLs, preview modal
+│   │   ├── SnippetPanel.tsx           # Snippet manager sidebar
+│   │   ├── PromptBox.tsx              # Agent message input with image attach
+│   │   ├── SettingsPanel.tsx          # App settings UI
+│   │   ├── ProfilePanel.tsx           # Profile switcher
+│   │   ├── EnvVarEditor.tsx           # Per-workspace env var editor
+│   │   └── UpdateNotification.tsx     # Update banner
 │   ├── stores/
-│   │   ├── workspace-store.ts  # Workspace state management
-│   │   └── settings-store.ts   # App settings
+│   │   ├── workspace-store.ts         # Workspace + terminal state (pub/sub)
+│   │   └── settings-store.ts          # App settings persistence
 │   ├── types/
-│   │   ├── index.ts            # Core types
-│   │   └── claude-agent.ts     # Claude message types
+│   │   ├── index.ts                   # Core types (Workspace, AppSettings, etc.)
+│   │   ├── claude-agent.ts            # Claude message and tool call types
+│   │   ├── agent-presets.ts           # Agent preset definitions
+│   │   └── electron.d.ts             # window.electronAPI type declarations
 │   └── styles/
 │       ├── main.css
 │       ├── claude-agent.css
 │       └── path-linker.css
+├── assets/                            # App icons and screenshots
+├── scripts/
+│   └── build-version.js               # Version string generator
 └── package.json
 ```
 
@@ -178,83 +210,89 @@ better-agent-terminal/
 - **Terminal:** xterm.js + node-pty
 - **Framework:** Electron 28
 - **AI:** @anthropic-ai/claude-agent-sdk
-- **Build:** Vite + electron-builder
-- **Storage:** better-sqlite3
+- **Build:** Vite 5 + electron-builder
+- **Storage:** better-sqlite3 (snippets, session data)
+- **Remote:** ws (WebSocket) + qrcode
+- **Syntax Highlighting:** highlight.js
 
 ---
 
 ## Remote Access & Mobile Connect
 
-BAT 內建 WebSocket Server，允許其他 BAT 實例或行動裝置遠端連線控制。此功能目前為**實驗性質**。
+BAT includes a built-in WebSocket server that allows other BAT instances or mobile devices to connect and control it remotely. This feature is currently **experimental**.
 
-### 運作原理
+### How It Works
 
-1. **Host（主機端）** 在 Settings → Remote Access 啟動 WebSocket Server（預設 port 9876）
-2. Server 啟動時產生一組 **Connection Token**（32 字元 hex），用於驗證連線身份
-3. **Client（連線端）** 透過 Remote Profile 輸入主機 IP、Port、Token 即可連入
-4. 連線後 Client 可操作主機上的所有 Terminal、Claude Agent、Workspace 等功能
+1. The **Host** enables the WebSocket server in Settings → Remote Access (default port: 9876)
+2. On startup, the server generates a **Connection Token** (32-character hex string) used to authenticate connections
+3. The **Client** connects by entering the host IP, port, and token via a Remote Profile
+4. Once connected, the client can operate all terminals, Claude Agent sessions, workspaces, and other features on the host
 
-### 連線方式
+### Connection Methods
 
-#### 方式一：Remote Profile（BAT 對 BAT）
+#### Method 1: Remote Profile (BAT-to-BAT)
 
-在 Client 端的 BAT：
+On the client BAT instance:
 
-1. 開啟 Settings → Profiles
-2. 建立新 Profile，類型選 **Remote**
-3. 填入 Host IP、Port（9876）、Token
-4. 載入該 Profile 即連上遠端主機
+1. Open Settings → Profiles
+2. Create a new profile and set the type to **Remote**
+3. Enter the host IP, port (9876), and token
+4. Load the profile to connect to the remote host
 
-#### 方式二：QR Code（行動裝置）
+#### Method 2: QR Code (Mobile Devices)
 
-在 Host 端的 BAT：
+On the host BAT instance:
 
-1. 開啟 Settings → Remote Access → **Generate QR Code**
-2. 若 Server 未啟動會自動啟動
-3. 使用行動裝置掃描 QR Code 即可取得連線資訊
-4. QR Code 內含 WebSocket URL 與 Token（JSON 格式）
+1. Open Settings → Remote Access → **Generate QR Code**
+2. If the server is not yet running, it will start automatically
+3. Scan the QR code with a mobile device to retrieve the connection info
+4. The QR code contains the WebSocket URL and token (in JSON format)
 
-### 推薦使用 Tailscale 進行跨網段連線
+### Recommended: Use Tailscale for Cross-Network Connections
 
-若 Host 與 Client 不在同一個區域網路（例如在家連公司電腦），建議使用 [Tailscale](https://tailscale.com/) 建立安全的點對點 VPN：
+If the host and client are not on the same local network (e.g., connecting from home to an office machine), we recommend using [Tailscale](https://tailscale.com/) to establish a secure peer-to-peer VPN:
 
-- **免費方案**支援最多 100 台裝置
-- 不需要設定 port forwarding 或架設額外伺服器
-- 每台裝置會取得一個固定的 `100.x.x.x` IP
-- BAT 會自動偵測 Tailscale IP 並優先使用
+- **Free plan** supports up to 100 devices
+- No port forwarding or additional server setup required
+- Each device gets a stable `100.x.x.x` IP address
+- BAT automatically detects Tailscale IPs and uses them preferentially
 
-**安裝方式：**
+**Installation:**
 
-| 平台 | 安裝 |
-|------|------|
-| macOS | [Download](https://tailscale.com/download/macos) 或 `brew install tailscale` |
+| Platform | Install |
+|----------|---------|
+| macOS | [Download](https://tailscale.com/download/macos) or `brew install tailscale` |
 | Windows | [Download](https://tailscale.com/download/windows) |
 | iOS | [App Store](https://apps.apple.com/app/tailscale/id1470499037) |
 | Android | [Google Play](https://play.google.com/store/apps/details?id=com.tailscale.ipn) |
 | Linux | [Install Guide](https://tailscale.com/download/linux) |
 
-安裝後登入同一帳號，所有裝置即可互通。BAT 的 QR Code 會自動使用 Tailscale IP。
+After installation, sign in with the same account on all devices and they will be able to communicate. BAT's QR code will automatically use the Tailscale IP.
 
-### 安全注意事項
+### Security Notice
 
-> **⚠ 警告：** 啟動 Remote Server 會開放 WebSocket 連線，任何持有 Token 的裝置皆可完整控制此主機上的 BAT，包括執行終端指令、操作檔案系統、控制 Claude Agent 等。
+> **Warning:** Enabling the Remote Server opens a WebSocket connection. Any device with the token can fully control BAT on the host machine, including executing terminal commands, accessing the file system, and controlling Claude Agent sessions.
 >
-> - 請勿在不信任的網路環境下啟動 Server
-> - 請勿將 Token 分享給不信任的人
-> - 不使用時請關閉 Server
-> - 強烈建議搭配 Tailscale 使用，避免直接暴露在公網
+> - Do not start the server on untrusted networks
+> - Do not share the token with untrusted parties
+> - Shut down the server when not in use
+> - Strongly recommended to use Tailscale to avoid direct exposure to the public internet
 
 ---
 
 ## Configuration
 
-Workspaces and settings are saved to:
+Workspaces, settings, and session data are saved to:
 
 | Platform | Path |
 |---|---|
 | Windows | `%APPDATA%/better-agent-terminal/` |
 | macOS | `~/Library/Application Support/better-agent-terminal/` |
 | Linux | `~/.config/better-agent-terminal/` |
+
+### Debug Logging
+
+Set the `BAT_DEBUG=1` environment variable to enable disk-based debug logging. Logs are written to `debug.log` in the configuration directory.
 
 ---
 
@@ -271,8 +309,8 @@ Example: `v1.25.1219091538` = 2025-12-19 09:15:38
 Push a tag to trigger builds for all platforms:
 
 ```bash
-git tag v1.37.0
-git push origin v1.37.0
+git tag v1.52.0
+git push origin v1.52.0
 ```
 
 ---
