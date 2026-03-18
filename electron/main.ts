@@ -41,6 +41,7 @@ import { broadcastHub } from './remote/broadcast-hub'
 import { PROXIED_CHANNELS } from './remote/protocol'
 import { RemoteServer } from './remote/remote-server'
 import { RemoteClient } from './remote/remote-client'
+import { getConnectionUrl } from './remote/tunnel-manager'
 import { logger } from './logger'
 
 // Startup timing — capture module load time before anything else
@@ -619,6 +620,12 @@ function registerProxiedHandlers() {
   registerHandler('snippet:search', (query: string) => snippetDb.search(query))
   registerHandler('snippet:getCategories', () => snippetDb.getCategories())
   registerHandler('snippet:getFavorites', () => snippetDb.getFavorites())
+
+  // Profile (subset exposed to remote clients)
+  registerHandler('profile:list', () => profileManager.list())
+  registerHandler('profile:load', (profileId: string) => profileManager.load(profileId))
+  registerHandler('profile:get-active-id', () => profileManager.getActiveProfileId())
+  registerHandler('profile:set-active', (profileId: string) => profileManager.setActiveProfileId(profileId))
 }
 
 // ── Bind all proxied handlers to ipcMain ──
@@ -715,6 +722,22 @@ function registerLocalHandlers() {
     clients: remoteServer.connectedClients
   }))
 
+  // Mobile QR code connection: ensure server is running, return connection URL
+  ipcMain.handle('tunnel:get-connection', async () => {
+    try {
+      // Start remote server if not already running
+      if (!remoteServer.isRunning) {
+        remoteServer.start()
+      }
+      // Read persisted token
+      const tokenPath = path.join(app.getPath('userData'), 'server-token.json')
+      const data = JSON.parse(fsSync.readFileSync(tokenPath, 'utf-8'))
+      return getConnectionUrl(remoteServer.port!, data.token)
+    } catch (err: unknown) {
+      return { error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
   // Remote client handlers
   ipcMain.handle('remote:connect', async (_event, host: string, port: number, token: string, label?: string) => {
     try {
@@ -750,18 +773,14 @@ function registerLocalHandlers() {
     }
   })
 
-  // Profile handlers (always local)
-  ipcMain.handle('profile:list', async () => profileManager.list())
+  // Profile handlers (local-only — list/load/set-active/get-active-id are proxied)
   ipcMain.handle('profile:create', async (_event, name: string, options?: { type?: 'local' | 'remote'; remoteHost?: string; remotePort?: number; remoteToken?: string }) => profileManager.create(name, options))
   ipcMain.handle('profile:save', async (_event, profileId: string) => profileManager.save(profileId))
-  ipcMain.handle('profile:load', async (_event, profileId: string) => profileManager.load(profileId))
   ipcMain.handle('profile:delete', async (_event, profileId: string) => profileManager.delete(profileId))
   ipcMain.handle('profile:rename', async (_event, profileId: string, newName: string) => profileManager.rename(profileId, newName))
   ipcMain.handle('profile:duplicate', async (_event, profileId: string, newName: string) => profileManager.duplicate(profileId, newName))
   ipcMain.handle('profile:update', async (_event, profileId: string, updates: { remoteHost?: string; remotePort?: number; remoteToken?: string }) => profileManager.update(profileId, updates))
   ipcMain.handle('profile:get', async (_event, profileId: string) => profileManager.getProfile(profileId))
-  ipcMain.handle('profile:set-active', async (_event, profileId: string) => profileManager.setActiveProfileId(profileId))
-  ipcMain.handle('profile:get-active-id', async () => profileManager.getActiveProfileId())
 
   // Get the profile ID this instance was launched with (--profile= argument)
   ipcMain.handle('app:get-launch-profile', () => launchProfileId)

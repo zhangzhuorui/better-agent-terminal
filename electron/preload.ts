@@ -222,6 +222,10 @@ const electronAPI = {
     testConnection: (host: string, port: number, token: string) =>
       ipcRenderer.invoke('remote:test-connection', host, port, token) as Promise<{ ok: boolean }>,
   },
+  tunnel: {
+    getConnection: () =>
+      ipcRenderer.invoke('tunnel:get-connection') as Promise<{ url: string; token: string; mode: string } | { error: string }>,
+  },
   system: {
     onResume: (callback: () => void) => {
       const handler = () => callback()

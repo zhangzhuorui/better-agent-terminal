@@ -32,6 +32,9 @@ interface ElectronAPI {
     openNewInstance: (profileId: string) => Promise<void>
     getLaunchProfile: () => Promise<string | null>
   }
+  tunnel: {
+    getConnection: () => Promise<{ url: string; token: string; mode: string } | { error: string }>
+  }
 }
 
 declare global {

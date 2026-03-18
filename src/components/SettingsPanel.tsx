@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
+import QRCode from 'qrcode'
 import type { AppSettings, ShellType, FontType, ColorPresetId, StatuslineItemConfig } from '../types'
 import { FONT_OPTIONS, COLOR_PRESETS, SHELL_OPTIONS, STATUSLINE_ITEMS } from '../types'
 import { settingsStore, parseStatuslineTemplate, exportStatuslineTemplate } from '../stores/settings-store'
@@ -42,6 +43,12 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
   const [serverPort, setServerPort] = useState('9876')
   const [serverToken, setServerToken] = useState<string | null>(null)
   const [clientStatus, setClientStatus] = useState<RemoteClientStatus>({ connected: false, info: null })
+
+  // QR code state
+  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null)
+  const [qrInfo, setQrInfo] = useState<{ url: string; mode: string } | null>(null)
+  const [qrLoading, setQrLoading] = useState(false)
+  const [qrError, setQrError] = useState<string | null>(null)
 
   // Statusline config state
   const [slItems, setSlItems] = useState<StatuslineItemConfig[]>(settingsStore.getStatuslineItems())
@@ -145,6 +152,30 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
     const ss = await window.electronAPI.remote.serverStatus()
     setServerStatus(ss)
   }
+
+  const handleGenerateQR = useCallback(async () => {
+    setQrLoading(true)
+    setQrError(null)
+    try {
+      const result = await window.electronAPI.tunnel.getConnection()
+      if ('error' in result) {
+        setQrError(result.error)
+        return
+      }
+      const payload = JSON.stringify({ url: result.url, token: result.token, mode: result.mode })
+      const dataUrl = await QRCode.toDataURL(payload, { width: 256, margin: 2 })
+      setQrDataUrl(dataUrl)
+      setQrInfo({ url: result.url, mode: result.mode })
+      // Refresh server status since we may have started it
+      const ss = await window.electronAPI.remote.serverStatus()
+      setServerStatus(ss)
+      if (result.token) setServerToken(result.token)
+    } catch (err) {
+      setQrError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setQrLoading(false)
+    }
+  }, [])
 
   const terminalColors = settingsStore.getTerminalColors()
 
@@ -592,6 +623,53 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                 </span>
               </div>
             )}
+
+            <div className="settings-group" style={{ marginTop: 12, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+              <label>Mobile Connect <span style={{ fontSize: 10, color: '#d29922', fontWeight: 'normal' }}>(Experimental)</span></label>
+              <p style={{ fontSize: 11, color: '#8b949e', marginTop: 2, marginBottom: 6, lineHeight: 1.4 }}>
+                產生 QR Code 供遠端裝置掃描連線，可遠端控制此主機上的 BAT。
+                目前也可透過其他 Better Agent Terminal 以 Remote Profile 方式連入。
+              </p>
+              {!qrDataUrl ? (
+                <>
+                  <button
+                    className="profile-action-btn primary"
+                    onClick={handleGenerateQR}
+                    disabled={qrLoading}
+                    style={{ marginTop: 4 }}
+                  >
+                    {qrLoading ? 'Generating...' : 'Generate QR Code'}
+                  </button>
+                  <p style={{ fontSize: 11, color: '#d29922', marginTop: 6, lineHeight: 1.4 }}>
+                    ⚠ 這會啟動 WebSocket Server 允許外部連入，請確認你的網路環境安全後再使用。
+                  </p>
+                  {qrError && (
+                    <p style={{ fontSize: 11, color: '#f85149', marginTop: 4 }}>{qrError}</p>
+                  )}
+                </>
+              ) : (
+                <div style={{ textAlign: 'center', marginTop: 8 }}>
+                  <img
+                    src={qrDataUrl}
+                    alt="QR Code"
+                    style={{ width: 200, height: 200, imageRendering: 'pixelated', borderRadius: 4, background: '#fff', padding: 4 }}
+                  />
+                  <p style={{ fontSize: 11, color: '#8b949e', marginTop: 6, wordBreak: 'break-all', fontFamily: 'monospace' }}>
+                    {qrInfo?.url}
+                  </p>
+                  <p style={{ fontSize: 11, color: qrInfo?.mode === 'tailscale' ? '#3fb950' : '#d29922', marginTop: 2 }}>
+                    {qrInfo?.mode === 'tailscale' ? 'via Tailscale' : 'LAN only — 手機需在同一網段'}
+                  </p>
+                  <button
+                    className="profile-action-btn"
+                    onClick={() => { setQrDataUrl(null); setQrInfo(null) }}
+                    style={{ marginTop: 8 }}
+                  >
+                    Close
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
