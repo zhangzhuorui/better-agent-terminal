@@ -2,9 +2,9 @@
 
 <div align="center">
 
-<img src="assets/icon.svg" width="128" height="128" alt="Better Agent Terminal">
+<img src="assets/icon.png" width="128" height="128" alt="Better Agent Terminal">
 
-![Version](https://img.shields.io/badge/version-1.52.0-blue.svg)
+![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%20|%20macOS%20|%20Linux-lightgrey.svg)
 ![Electron](https://img.shields.io/badge/electron-28.3.3-47848F.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
