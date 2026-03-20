@@ -2,6 +2,7 @@
   "name": "better-agent-terminal",
   "version": "2.0.1",
   "description": "Windows terminal aggregator with multi-workspace support and Claude Code integration",
+  "author": "TonyQ CO., LTD.",
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "cross-env BAT_DEBUG=1 vite",
@@ -38,7 +39,7 @@
     "@lydell/node-pty": "^1.1.0"
   },
   "devDependencies": {
-    "@electron/rebuild": "^4.0.2",
+
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^20.0.0",
     "@types/react": "^18.2.0",
