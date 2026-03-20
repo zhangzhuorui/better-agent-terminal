@@ -222,7 +222,7 @@ class WorkspaceStore {
   }
 
   // SDK session persistence — per terminal
-  setTerminalSdkSessionId(terminalId: string, sdkSessionId: string): void {
+  setTerminalSdkSessionId(terminalId: string, sdkSessionId: string | undefined): void {
     this.state = {
       ...this.state,
       terminals: this.state.terminals.map(t =>

@@ -620,6 +620,9 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
         setPendingQuestion(null)
         setAskAnswers({})
         setAskOtherText({})
+        setSessionMeta(null)
+        setHasSdkSession(false)
+        workspaceStore.setTerminalSdkSessionId(sessionId, undefined)
       }),
 
       api.onHistory((sid: string, items: unknown[]) => {
