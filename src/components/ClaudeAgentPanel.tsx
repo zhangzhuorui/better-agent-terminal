@@ -611,6 +611,17 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
         setPendingPermission(null)
       }),
 
+      api.onSessionReset((sid: string) => {
+        if (sid !== sessionId) return
+        setMessages([])
+        setStreamingText('')
+        setStreamingThinking('')
+        setPendingPermission(null)
+        setPendingQuestion(null)
+        setAskAnswers({})
+        setAskOtherText({})
+      }),
+
       api.onHistory((sid: string, items: unknown[]) => {
         if (sid !== sessionId) {
           console.log(`${tag} SKIP onHistory sid=${sid.slice(0, 8)} items=${(items as unknown[]).length} (mine=${sessionId.slice(0, 8)})`)

@@ -1413,6 +1413,8 @@ export class ClaudeAgentManager {
         newSession.model = model
       }
     }
+    // Notify all windows to clear UI for this session
+    this.send('claude:session-reset', sessionId)
     return ok
   }
 

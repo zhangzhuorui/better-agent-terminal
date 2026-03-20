@@ -183,6 +183,11 @@ const electronAPI = {
       ipcRenderer.on('claude:permission-resolved', handler)
       return () => ipcRenderer.removeListener('claude:permission-resolved', handler)
     },
+    onSessionReset: (callback: (sessionId: string) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, sessionId: string) => callback(sessionId)
+      ipcRenderer.on('claude:session-reset', handler)
+      return () => ipcRenderer.removeListener('claude:session-reset', handler)
+    },
     onPromptSuggestion: (callback: (sessionId: string, suggestion: string) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, sessionId: string, suggestion: string) => callback(sessionId, suggestion)
       ipcRenderer.on('claude:prompt-suggestion', handler)
