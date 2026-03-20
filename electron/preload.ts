@@ -173,6 +173,16 @@ const electronAPI = {
       ipcRenderer.on('claude:ask-user', handler)
       return () => ipcRenderer.removeListener('claude:ask-user', handler)
     },
+    onAskUserResolved: (callback: (sessionId: string, toolUseId: string) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, sessionId: string, toolUseId: string) => callback(sessionId, toolUseId)
+      ipcRenderer.on('claude:ask-user-resolved', handler)
+      return () => ipcRenderer.removeListener('claude:ask-user-resolved', handler)
+    },
+    onPermissionResolved: (callback: (sessionId: string, toolUseId: string) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, sessionId: string, toolUseId: string) => callback(sessionId, toolUseId)
+      ipcRenderer.on('claude:permission-resolved', handler)
+      return () => ipcRenderer.removeListener('claude:permission-resolved', handler)
+    },
     onPromptSuggestion: (callback: (sessionId: string, suggestion: string) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, sessionId: string, suggestion: string) => callback(sessionId, suggestion)
       ipcRenderer.on('claude:prompt-suggestion', handler)

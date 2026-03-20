@@ -1075,6 +1075,8 @@ export class ClaudeAgentManager {
     }
     pending.resolve(result)
     session.pendingPermissions.delete(toolUseId)
+    // Notify all windows to dismiss the permission UI
+    this.send('claude:permission-resolved', sessionId, toolUseId)
     return true
   }
 
@@ -1089,6 +1091,8 @@ export class ClaudeAgentManager {
       updatedInput: { answers },
     })
     session.pendingAskUser.delete(toolUseId)
+    // Notify all windows to dismiss the ask-user UI
+    this.send('claude:ask-user-resolved', sessionId, toolUseId)
     return true
   }
 

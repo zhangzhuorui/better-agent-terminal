@@ -44,7 +44,7 @@ export const PROXIED_EVENTS = new Set([
   'pty:output', 'pty:exit',
   'claude:message', 'claude:tool-use', 'claude:tool-result',
   'claude:stream', 'claude:result', 'claude:error',
-  'claude:status', 'claude:permission-request', 'claude:ask-user',
+  'claude:status', 'claude:permission-request', 'claude:permission-resolved', 'claude:ask-user', 'claude:ask-user-resolved',
   'claude:modeChange', 'claude:history', 'claude:prompt-suggestion',
   'workspace:detached', 'workspace:reattached',
   'system:resume',
