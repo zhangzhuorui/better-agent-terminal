@@ -123,6 +123,7 @@ interface SessionInstance {
   enable1MContext: boolean
   model?: string
   messageQueue: QueuedMessage[]
+  currentPrompt?: string  // Track the currently running prompt for abort context
   isResting?: boolean
   activeTasks: Map<string, ActiveTask>
 }
@@ -292,12 +293,16 @@ export class ClaudeAgentManager {
 
     if (session.state.isStreaming) {
       // Abort current query and immediately send the new message
-      // The SDK session ID is preserved, so the next runQuery will resume with conversation context
+      // Prepend the aborted prompt as context so Claude doesn't forget it
+      const abortedPrompt = session.currentPrompt
       session.abortController.abort()
       session.pendingPermissions.clear()
       session.pendingAskUser.clear()
       session.messageQueue.length = 0
-      session.messageQueue.push({ prompt, images })
+      const contextualPrompt = abortedPrompt && abortedPrompt !== prompt
+        ? `[使用者先前的訊息（已中斷）: "${abortedPrompt}"]\n\n${prompt}`
+        : prompt
+      session.messageQueue.push({ prompt: contextualPrompt, images })
       return true
     }
 
@@ -312,6 +317,7 @@ export class ClaudeAgentManager {
 
     session.state.isStreaming = true
     session.abortController = new AbortController()
+    session.currentPrompt = prompt
 
     // Collect stderr output for better error diagnostics
     let stderrOutput = ''
@@ -851,6 +857,7 @@ export class ClaudeAgentManager {
     } finally {
       if (session) {
         session.state.isStreaming = false
+        session.currentPrompt = undefined
         session.activeTasks.clear()
         // Mark any tool calls still in 'running' state as error (e.g. subprocess crashed)
         for (const msg of session.state.messages) {
