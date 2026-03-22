@@ -314,7 +314,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
           </div>
 
           <div className="settings-section">
-            <h3>{t('settings.dockBadge')}</h3>
+            <h3>{t('settings.notifications')}</h3>
             <div className="settings-group checkbox-group">
               <label>
                 <input
@@ -325,6 +325,38 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                 {t('settings.showDockBadge')}
               </label>
               <p className="settings-hint">{t('settings.showDockBadgeHint')}</p>
+            </div>
+            <div className="settings-group checkbox-group">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={settings.notifyOnComplete !== false}
+                  onChange={e => settingsStore.setNotifyOnComplete(e.target.checked)}
+                />
+                {t('settings.notifyOnComplete')}
+              </label>
+              <p className="settings-hint">{t('settings.notifyOnCompleteHint')}</p>
+            </div>
+            <div className="settings-group checkbox-group">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={settings.notifySound !== false}
+                  onChange={e => settingsStore.setNotifySound(e.target.checked)}
+                />
+                {t('settings.notifySound')}
+              </label>
+            </div>
+            <div className="settings-group checkbox-group">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={settings.notifyOnlyBackground !== false}
+                  onChange={e => settingsStore.setNotifyOnlyBackground(e.target.checked)}
+                />
+                {t('settings.notifyOnlyBackground')}
+              </label>
+              <p className="settings-hint">{t('settings.notifyOnlyBackgroundHint')}</p>
             </div>
           </div>
 
