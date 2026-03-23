@@ -192,6 +192,13 @@ class SettingsStore {
     this.save()
   }
 
+  setShowDockBadge(show: boolean): void {
+    this.settings = { ...this.settings, showDockBadge: show }
+    this.notify()
+    this.save()
+    if (!show) window.electronAPI?.app?.setDockBadge?.(0)
+  }
+
   // Get the agent command to execute
   getAgentCommand(): string | null {
     if (!this.settings.agentAutoCommand) return null

@@ -58,6 +58,7 @@ const electronAPI = {
   app: {
     openNewInstance: (profileId: string) => ipcRenderer.invoke('app:open-new-instance', profileId),
     getLaunchProfile: () => ipcRenderer.invoke('app:get-launch-profile') as Promise<string | null>,
+    setDockBadge: (count: number) => ipcRenderer.invoke('app:set-dock-badge', count),
   },
   update: {
     check: () => ipcRenderer.invoke('update:check'),

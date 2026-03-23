@@ -314,6 +314,21 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
           </div>
 
           <div className="settings-section">
+            <h3>{t('settings.dockBadge')}</h3>
+            <div className="settings-group checkbox-group">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={settings.showDockBadge !== false}
+                  onChange={e => settingsStore.setShowDockBadge(e.target.checked)}
+                />
+                {t('settings.showDockBadge')}
+              </label>
+              <p className="settings-hint">{t('settings.showDockBadgeHint')}</p>
+            </div>
+          </div>
+
+          <div className="settings-section">
             <h3>{t('settings.appearance')}</h3>
             <div className="settings-group">
               <label>{t('settings.fontSize', { size: settings.fontSize })}</label>

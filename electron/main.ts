@@ -1061,6 +1061,15 @@ function registerLocalHandlers() {
   // Get the profile ID this instance was launched with (--profile= argument)
   ipcMain.handle('app:get-launch-profile', () => launchProfileId)
 
+  // Dock badge count (macOS/Linux)
+  ipcMain.handle('app:set-dock-badge', (_event, count: number) => {
+    if (process.platform === 'darwin') {
+      app.dock.setBadge(count > 0 ? String(count) : '')
+    } else if (process.platform === 'linux') {
+      app.setBadgeCount(count)
+    }
+  })
+
   // Open new instance with a specific profile
   ipcMain.handle('app:open-new-instance', async (_event, profileId: string) => {
     const { spawn } = await import('child_process')
