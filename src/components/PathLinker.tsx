@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
+import { useTranslation } from 'react-i18next'
 import hljs from 'highlight.js/lib/core'
 import 'highlight.js/styles/vs2015.css'
 // Register only the languages we actually use (saves ~800KB vs full highlight.js)
@@ -195,6 +196,7 @@ interface FilePreviewModalProps {
 }
 
 export function FilePreviewModal({ filePath, onClose }: FilePreviewModalProps) {
+  const { t } = useTranslation()
   const [content, setContent] = useState<string | null>(null)
   const [imageUrl, setImageUrl] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -218,7 +220,7 @@ export function FilePreviewModal({ filePath, onClose }: FilePreviewModalProps) {
       window.electronAPI.image.readAsDataUrl(filePath).then(url => {
         if (!cancelled) { setImageUrl(url); setLoading(false) }
       }).catch(() => {
-        if (!cancelled) { setError('Failed to load image'); setLoading(false) }
+        if (!cancelled) { setError(t('fileTree.previewLoadImageFailed')); setLoading(false) }
       })
     } else {
       // Read as text — works for known and unknown text extensions
@@ -233,7 +235,7 @@ export function FilePreviewModal({ filePath, onClose }: FilePreviewModalProps) {
       })
     }
     return () => { cancelled = true }
-  }, [filePath])
+  }, [filePath, t])
 
   const handleCopyPath = useCallback(() => {
     navigator.clipboard.writeText(filePath).then(() => {
@@ -332,27 +334,27 @@ export function FilePreviewModal({ filePath, onClose }: FilePreviewModalProps) {
       <div className="path-preview-modal" onClick={e => e.stopPropagation()}>
         <div className="path-preview-header">
           <span className="path-preview-title" title={filePath}>{fileName}</span>
-          <span className="path-preview-path" onClick={handleCopyPath} title="Click to copy path">
-            {copied ? 'Copied!' : filePath}
+          <span className="path-preview-path" onClick={handleCopyPath} title={t('pathPreview.clickToCopyPath')}>
+            {copied ? t('pathPreview.copied') : filePath}
           </span>
           <button
             className="path-preview-btn"
             onClick={handleCopyPath}
-            title="Copy file path"
+            title={t('pathPreview.copyFilePath')}
           >
             {copied ? '\u2713' : '\u2398'}
           </button>
           <button
             className="path-preview-btn"
             onClick={() => window.electronAPI.shell.openPath(filePath)}
-            title="Open with system default app"
+            title={t('pathPreview.openDefaultApp')}
           >
             &#8599;
           </button>
           <button
             className="path-preview-btn"
             onClick={() => { setSearchOpen(o => !o); setTimeout(() => searchInputRef.current?.focus(), 50) }}
-            title="Search (Ctrl+F)"
+            title={t('pathPreview.search')}
           >
             &#128269;
           </button>
@@ -364,7 +366,7 @@ export function FilePreviewModal({ filePath, onClose }: FilePreviewModalProps) {
               ref={searchInputRef}
               className="path-preview-search-input"
               type="text"
-              placeholder="Search..."
+              placeholder={t('pathPreview.searchPlaceholder')}
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
               onKeyDown={e => {
@@ -372,13 +374,13 @@ export function FilePreviewModal({ filePath, onClose }: FilePreviewModalProps) {
                 if (e.key === 'Escape') { e.preventDefault(); setSearchOpen(false); setSearchQuery('') }
               }}
             />
-            {searchQuery && <span className="path-preview-search-count">{matchCount > 0 ? `${currentMatch}/${matchCount}` : 'No results'}</span>}
-            <button className="path-preview-search-nav" onClick={() => navigateMatch(-1)} disabled={matchCount === 0} title="Previous (Shift+Enter)">&uarr;</button>
-            <button className="path-preview-search-nav" onClick={() => navigateMatch(1)} disabled={matchCount === 0} title="Next (Enter)">&darr;</button>
+            {searchQuery && <span className="path-preview-search-count">{matchCount > 0 ? `${currentMatch}/${matchCount}` : t('pathPreview.noResults')}</span>}
+            <button className="path-preview-search-nav" onClick={() => navigateMatch(-1)} disabled={matchCount === 0} title={t('pathPreview.previousMatch')}>&uarr;</button>
+            <button className="path-preview-search-nav" onClick={() => navigateMatch(1)} disabled={matchCount === 0} title={t('pathPreview.nextMatch')}>&darr;</button>
           </div>
         )}
         <div className="path-preview-body" ref={bodyRef}>
-          {loading && <div className="path-preview-status">Loading...</div>}
+          {loading && <div className="path-preview-status">{t('pathPreview.loading')}</div>}
           {error && <div className="path-preview-status">{error}</div>}
           {imageUrl && (
             <div className="path-preview-image">

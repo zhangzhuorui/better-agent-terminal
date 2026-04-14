@@ -24,6 +24,7 @@ interface SidebarProps {
   onDetachWorkspace: (workspaceId: string) => void
   onOpenProfiles: () => void
   onOpenSettings: () => void
+  onOpenPlatformHub: () => void
 }
 
 export function Sidebar({
@@ -45,6 +46,7 @@ export function Sidebar({
   onDetachWorkspace,
   onOpenProfiles,
   onOpenSettings,
+  onOpenPlatformHub,
 }: Readonly<SidebarProps>) {
   const { t } = useTranslation()
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -370,6 +372,9 @@ export function Sidebar({
         <div className="sidebar-footer-buttons">
           <button className="settings-btn" onClick={onOpenProfiles}>
             {t('sidebar.profiles')}
+          </button>
+          <button className="settings-btn" onClick={onOpenPlatformHub}>
+            {t('sidebar.platformHub')}
           </button>
           <button className="settings-btn" onClick={onOpenSettings}>
             {t('sidebar.settings')}

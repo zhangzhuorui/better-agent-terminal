@@ -366,6 +366,17 @@ class WorkspaceStore {
     this.save()
   }
 
+  setTerminalContextPackages(id: string, packageIds: string[]): void {
+    this.state = {
+      ...this.state,
+      terminals: this.state.terminals.map(t =>
+        t.id === id ? { ...t, contextPackageIds: packageIds.length ? packageIds : undefined } : t
+      ),
+    }
+    this.notify()
+    this.save()
+  }
+
   appendScrollback(id: string, data: string): void {
     this.state = {
       ...this.state,
@@ -559,6 +570,7 @@ class WorkspaceStore {
         sdkSessionId: t.sdkSessionId,
         model: t.model,
         sessionMeta: t.sessionMeta,
+        contextPackageIds: t.contextPackageIds,
       }))
       const data = JSON.stringify({
         workspaces: this.state.workspaces,
@@ -592,6 +604,7 @@ class WorkspaceStore {
           sdkSessionId: t.sdkSessionId,
           model: t.model,
           sessionMeta: t.sessionMeta,
+          contextPackageIds: t.contextPackageIds,
           scrollbackBuffer: [],
           pid: undefined,
         }))

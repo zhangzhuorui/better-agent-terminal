@@ -71,8 +71,12 @@ const electronAPI = {
   claude: {
     startSession: (sessionId: string, options: { cwd: string; prompt?: string; permissionMode?: string; model?: string }) =>
       ipcRenderer.invoke('claude:start-session', sessionId, options),
-    sendMessage: (sessionId: string, prompt: string, images?: string[]) =>
-      ipcRenderer.invoke('claude:send-message', sessionId, prompt, images),
+    sendMessage: (
+      sessionId: string,
+      prompt: string,
+      images?: string[],
+      options?: { contextPackageIds?: string[]; analyticsSource?: 'user' | 'automation' }
+    ) => ipcRenderer.invoke('claude:send-message', sessionId, prompt, images, options),
     stopSession: (sessionId: string) =>
       ipcRenderer.invoke('claude:stop-session', sessionId),
     onMessage: (callback: (sessionId: string, message: unknown) => void) => {
@@ -259,6 +263,30 @@ const electronAPI = {
   },
   debug: {
     log: (...args: unknown[]) => ipcRenderer.send('debug:log', ...args),
+  },
+  contextPackage: {
+    list: () => ipcRenderer.invoke('contextPackage:list'),
+    get: (id: string) => ipcRenderer.invoke('contextPackage:get', id),
+    create: (input: {
+      name: string
+      description?: string
+      content: string
+      tags?: string[]
+      workspaceRoot?: string
+    }) => ipcRenderer.invoke('contextPackage:create', input),
+    update: (
+      id: string,
+      updates: Partial<{ name: string; description?: string; content: string; tags?: string[]; workspaceRoot?: string }>
+    ) => ipcRenderer.invoke('contextPackage:update', id, updates),
+    delete: (id: string) => ipcRenderer.invoke('contextPackage:delete', id),
+  },
+  analytics: {
+    getSummary: () => ipcRenderer.invoke('analytics:getSummary'),
+  },
+  automation: {
+    list: () => ipcRenderer.invoke('automation:list'),
+    saveAll: (jobs: unknown[]) => ipcRenderer.invoke('automation:saveAll', jobs),
+    runNow: (id: string) => ipcRenderer.invoke('automation:runNow', id) as Promise<{ ok: boolean; error?: string }>,
   },
   snippet: {
     getAll: () => ipcRenderer.invoke('snippet:getAll'),

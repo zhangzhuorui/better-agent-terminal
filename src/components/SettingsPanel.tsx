@@ -99,6 +99,10 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
     settingsStore.setCustomShellPath(path)
   }
 
+  const handleUiThemeChange = (theme: 'dark' | 'light') => {
+    settingsStore.setTheme(theme)
+  }
+
   const handleFontSizeChange = (size: number) => {
     settingsStore.setFontSize(size)
   }
@@ -216,6 +220,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                 }}
               >
                 <option value="en">English</option>
+                <option value="zh-CN">简体中文（中国）</option>
                 <option value="zh-TW">繁體中文（台灣）</option>
               </select>
             </div>
@@ -363,6 +368,17 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
           <div className="settings-section">
             <h3>{t('settings.appearance')}</h3>
             <div className="settings-group">
+              <label>{t('settings.interfaceTheme')}</label>
+              <select
+                value={settings.theme === 'light' ? 'light' : 'dark'}
+                onChange={e => handleUiThemeChange(e.target.value as 'dark' | 'light')}
+              >
+                <option value="dark">{t('settings.interfaceThemeDark')}</option>
+                <option value="light">{t('settings.interfaceThemeLight')}</option>
+              </select>
+              <p className="settings-hint">{t('settings.interfaceThemeHint')}</p>
+            </div>
+            <div className="settings-group">
               <label>{t('settings.fontSize', { size: settings.fontSize })}</label>
               <input
                 type="range"
@@ -400,7 +416,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
             )}
 
             <div className="settings-group">
-              <label>{t('settings.colorTheme')}</label>
+              <label>{t('settings.terminalColorPreset')}</label>
               <select
                 value={settings.colorPreset}
                 onChange={e => handleColorPresetChange(e.target.value as ColorPresetId)}
@@ -411,6 +427,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                   </option>
                 ))}
               </select>
+              <p className="settings-hint">{t('settings.terminalColorPresetHint')}</p>
             </div>
 
             {settings.colorPreset === 'custom' && (

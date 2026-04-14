@@ -16,6 +16,10 @@ export const PROXIED_CHANNELS = new Set([
   'pty:create', 'pty:write', 'pty:resize', 'pty:kill', 'pty:restart', 'pty:get-cwd',
   // Claude
   'claude:start-session', 'claude:send-message', 'claude:stop-session',
+  // Platform extensions
+  'contextPackage:list', 'contextPackage:get', 'contextPackage:create', 'contextPackage:update', 'contextPackage:delete',
+  'analytics:getSummary',
+  'automation:list', 'automation:saveAll', 'automation:runNow',
   'claude:set-permission-mode', 'claude:set-model', 'claude:set-effort', 'claude:set-1m-context', 'claude:reset-session',
   'claude:get-supported-models', 'claude:get-account-info', 'claude:get-supported-commands', 'claude:get-session-meta',
   'claude:resolve-permission', 'claude:resolve-ask-user',

@@ -55,6 +55,8 @@ export interface TerminalInstance {
     numTurns: number;
     contextWindow: number;
   };
+  /** Context package IDs attached to this agent tab (merged into each send). */
+  contextPackageIds?: string[];
 }
 
 export interface AppState {
@@ -188,7 +190,7 @@ export const AGENT_COMMAND_OPTIONS: { id: AgentCommandType; name: string; comman
   { id: 'custom', name: 'Custom', command: '' },
 ];
 
-export type LanguageCode = 'en' | 'zh-TW';
+export type LanguageCode = 'en' | 'zh-TW' | 'zh-CN';
 
 export interface AppSettings {
   language: LanguageCode;

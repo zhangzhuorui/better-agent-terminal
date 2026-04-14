@@ -6,7 +6,10 @@ import { isToolCall } from '../types/claude-agent'
 import { settingsStore } from '../stores/settings-store'
 import { workspaceStore } from '../stores/workspace-store'
 import type { AgentPresetId } from '../types/agent-presets'
+import type { ContextPackage } from '../types/platform-extensions'
+import type { Workspace } from '../types'
 import { LinkedText, FilePreviewModal } from './PathLinker'
+import { ContextPackagePickerPopover } from './ContextPackagePickerPopover'
 
 interface SessionMeta {
   model?: string
@@ -82,6 +85,122 @@ type MessageItem = ClaudeMessage | ClaudeToolCall
 // Track sessions that have been started to prevent duplicate calls across StrictMode remounts
 const startedSessions = new Set<string>()
 
+const LARGE_SELECTION_CHARS = 200_000
+
+function isAllowedChatSelectionContent(el: Element): boolean {
+  return (
+    el.classList.contains('claude-message-user') ||
+    el.classList.contains('claude-message-assistant') ||
+    el.classList.contains('claude-message-system') ||
+    el.classList.contains('claude-thinking-block')
+  )
+}
+
+/** User selection must lie entirely inside one timeline `.tl-content` message bubble. */
+function getChatSelectionForContextPackage(root: HTMLElement): { text: string; left: number; top: number } | null {
+  const sel = window.getSelection()
+  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null
+  const raw = sel.toString()
+  if (!/\S/.test(raw)) return null
+
+  const anchor = sel.anchorNode
+  const focus = sel.focusNode
+  if (!anchor || !focus) return null
+
+  const asElement = (n: Node): Element | null =>
+    n.nodeType === Node.TEXT_NODE ? (n as Text).parentElement : (n as Element)
+
+  const startEl = asElement(anchor)
+  const endEl = asElement(focus)
+  if (!startEl || !endEl) return null
+  if (!root.contains(startEl) || !root.contains(endEl)) return null
+
+  const content1 = startEl.closest('.tl-content')
+  const content2 = endEl.closest('.tl-content')
+  if (!content1 || content1 !== content2) return null
+  if (!isAllowedChatSelectionContent(content1)) return null
+
+  const range = sel.getRangeAt(0)
+  const rect = range.getBoundingClientRect()
+  if (rect.width === 0 && rect.height === 0) return null
+
+  const pad = 8
+  const barW = 240
+  const left = Math.min(window.innerWidth - barW - pad, Math.max(pad, rect.left))
+  const top = Math.min(window.innerHeight - 48 - pad, rect.bottom + 6)
+  return { text: raw, left, top }
+}
+
+/**
+ * Segment keys: whole user/system message = `msgId`;
+ * assistant thinking = `msgId:thinking`, assistant body = `msgId:content` (independent).
+ */
+function buildContextPackageTextFromMessages(
+  items: MessageItem[],
+  selectedKeys: ReadonlySet<string>,
+  tr: (key: string) => string
+): string {
+  const parts: string[] = []
+  for (const item of items) {
+    if (isToolCall(item)) continue
+    const m = item as ClaudeMessage
+    if (!m.id) continue
+
+    if (m.role === 'user' || m.role === 'system') {
+      if (!selectedKeys.has(m.id)) continue
+      const roleLabel =
+        m.role === 'user' ? tr('claude.selectionRoleUser') : tr('claude.selectionRoleSystem')
+      const trimmed = (m.content || '').trim()
+      if (!trimmed) continue
+      parts.push(`--- ${roleLabel} ---\n${trimmed}`)
+      continue
+    }
+
+    const roleLabel = tr('claude.selectionRoleAssistant')
+    const tKey = `${m.id}:thinking`
+    const cKey = `${m.id}:content`
+    if (selectedKeys.has(tKey) && m.thinking?.trim()) {
+      const sub = tr('claude.contextPickSegmentThinking')
+      parts.push(`--- ${roleLabel} (${sub}) ---\n${m.thinking.trim()}`)
+    }
+    if (selectedKeys.has(cKey) && (m.content || '').trim()) {
+      const sub = tr('claude.contextPickSegmentBody')
+      parts.push(`--- ${roleLabel} (${sub}) ---\n${(m.content || '').trim()}`)
+    }
+  }
+  return parts.join('\n\n')
+}
+
+/**
+ * Must match `electron/claude-agent-manager` sendMessage user bubble `content`
+ * (user text + optional `[附加上下文包: …]` + optional `[N image(s) attached]`).
+ */
+function buildUserBubbleContent(
+  userText: string,
+  ctxIds: string[],
+  packages: ContextPackage[],
+  imageCount: number
+): string {
+  const byId = new Map(packages.map(p => [p.id, p]))
+  const ordered = ctxIds.map(id => byId.get(id)).filter((p): p is ContextPackage => !!p)
+  const pkgNote =
+    ordered.length > 0
+      ? `\n[附加上下文包: ${ordered.map(p => p.name).join(', ')}]`
+      : ''
+  const imageNote =
+    imageCount > 0
+      ? `\n[${imageCount} image${imageCount > 1 ? 's' : ''} attached]`
+      : ''
+  return userText + pkgNote + imageNote
+}
+
+/** Strip decorators so optimistic UI can dedupe against the main-process broadcast. */
+function userBubbleCoreText(content: string): string {
+  return content
+    .replace(/\n\[附加上下文包:[^\]]+\]/g, '')
+    .replace(/\n\[\d+ images? attached\]/g, '')
+}
+
 export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Readonly<ClaudeAgentPanelProps>) {
   const { t } = useTranslation()
   const [messages, setMessages] = useState<MessageItem[]>([])
@@ -153,6 +272,26 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
   const [filePickerIndex, setFilePickerIndex] = useState(0)
   const [filePickerPreview, setFilePickerPreview] = useState<string | null>(null)
   const filePickerInputRef = useRef<HTMLInputElement>(null)
+  const [availableContextPkgs, setAvailableContextPkgs] = useState<ContextPackage[]>([])
+  const [attachedPkgIds, setAttachedPkgIds] = useState<string[]>(() => {
+    const term = workspaceStore.getState().terminals.find(t => t.id === sessionId)
+    return term?.contextPackageIds ?? []
+  })
+  const [chatSelectionBar, setChatSelectionBar] = useState<{ text: string; left: number; top: number } | null>(null)
+  const [selectionPkgModal, setSelectionPkgModal] = useState<{
+    content: string
+    name: string
+    description: string
+    tags: string
+    attach: boolean
+    saving: boolean
+    err: string | null
+  } | null>(null)
+  const [contextPickMode, setContextPickMode] = useState(false)
+  const [contextPickedSegmentKeys, setContextPickedSegmentKeys] = useState<string[]>([])
+  const [workspaces, setWorkspaces] = useState<Workspace[]>(() => workspaceStore.getState().workspaces)
+  const [contextPkgPickerOpen, setContextPkgPickerOpen] = useState(false)
+  const contextPkgBrowseRef = useRef<HTMLDivElement>(null)
   // Message archiving — keep renderer memory bounded
   const [loadedArchive, setLoadedArchive] = useState<MessageItem[]>([])
   const [hasMoreArchived, setHasMoreArchived] = useState(false)
@@ -197,10 +336,63 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
 
   // Handle user scroll events on messages container
   const handleMessagesScroll = useCallback(() => {
+    setChatSelectionBar(null)
     const nearBottom = checkIfNearBottom()
     isNearBottomRef.current = nearBottom
     setUserScrolledUp(!nearBottom)
   }, [checkIfNearBottom])
+
+  const openSelectionPackageModal = useCallback(
+    (text: string) => {
+      const firstLine = text.split(/\r?\n/).find(line => /\S/.test(line)) ?? ''
+      const suggested = firstLine.replace(/^\s+/, '').slice(0, 52)
+      const name = suggested.length ? suggested : t('claude.selectionPackageDefaultName')
+      setSelectionPkgModal({
+        content: text,
+        name,
+        description: '',
+        tags: '',
+        attach: true,
+        saving: false,
+        err: null,
+      })
+      setChatSelectionBar(null)
+      try {
+        window.getSelection()?.removeAllRanges()
+      } catch {
+        /* ignore */
+      }
+    },
+    [t]
+  )
+
+  useEffect(() => {
+    if (!isActive) {
+      setChatSelectionBar(null)
+      return
+    }
+    const onMouseUp = () => {
+      if (selectionPkgModal || contextPickMode) return
+      requestAnimationFrame(() => {
+        const root = messagesContainerRef.current
+        if (!root) return
+        const ctx = getChatSelectionForContextPackage(root)
+        if (ctx) setChatSelectionBar(ctx)
+        else setChatSelectionBar(null)
+      })
+    }
+    document.addEventListener('mouseup', onMouseUp)
+    return () => document.removeEventListener('mouseup', onMouseUp)
+  }, [isActive, selectionPkgModal, contextPickMode])
+
+  useEffect(() => {
+    setContextPickMode(false)
+    setContextPickedSegmentKeys([])
+  }, [sessionId])
+
+  const toggleContextPickSegmentKey = useCallback((key: string) => {
+    setContextPickedSegmentKeys(prev => (prev.includes(key) ? prev.filter(x => x !== key) : [...prev, key]))
+  }, [])
 
   // Only auto-scroll if user hasn't scrolled up
   useEffect(() => {
@@ -208,6 +400,51 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
       messagesEndRef.current?.scrollIntoView({ behavior: 'instant' as ScrollBehavior })
     }
   }, [messages, streamingText, streamingThinking])
+
+  const refreshContextPackages = useCallback(() => {
+    window.electronAPI.contextPackage
+      .list()
+      .then((list: unknown) => {
+        if (Array.isArray(list)) setAvailableContextPkgs(list as ContextPackage[])
+      })
+      .catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    const term = workspaceStore.getState().terminals.find(t => t.id === sessionId)
+    setAttachedPkgIds(term?.contextPackageIds ?? [])
+  }, [sessionId])
+
+  useEffect(() => {
+    return workspaceStore.subscribe(() => {
+      const st = workspaceStore.getState()
+      const term = st.terminals.find(t => t.id === sessionId)
+      setAttachedPkgIds(term?.contextPackageIds ?? [])
+      setWorkspaces(st.workspaces)
+    })
+  }, [sessionId])
+
+  useEffect(() => {
+    refreshContextPackages()
+  }, [refreshContextPackages])
+
+  const removeAttachedContextPackage = useCallback(
+    (id: string) => {
+      workspaceStore.setTerminalContextPackages(
+        sessionId,
+        attachedPkgIds.filter(x => x !== id)
+      )
+    },
+    [attachedPkgIds, sessionId]
+  )
+
+  const defaultPackageWorkspaceRoot = useMemo(() => {
+    const term = workspaceStore.getState().terminals.find(t => t.id === sessionId)
+    const wid = workspaceId || term?.workspaceId
+    const ws = wid ? workspaces.find(w => w.id === wid) : undefined
+    const path = (ws?.folderPath || cwd || '').trim()
+    return path || undefined
+  }, [workspaceId, sessionId, cwd, workspaces])
 
   // Auto-scroll streaming thinking <pre> to bottom so latest content is visible
   useEffect(() => {
@@ -219,6 +456,15 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
 
   // Combine archived + live messages for rendering and scanning
   const allMessages = useMemo(() => [...loadedArchive, ...messages], [loadedArchive, messages])
+
+  const savePickedAsContextPackage = useCallback(() => {
+    if (contextPickedSegmentKeys.length === 0) return
+    const text = buildContextPackageTextFromMessages(allMessages, new Set(contextPickedSegmentKeys), t)
+    if (!text.trim()) return
+    setContextPickMode(false)
+    setContextPickedSegmentKeys([])
+    openSelectionPackageModal(text)
+  }, [contextPickedSegmentKeys, allMessages, t, openSelectionPackageModal])
 
   // Active tasks (running Task/Agent tool calls) for the indicator bar
   const activeTasks = useMemo(() => {
@@ -425,6 +671,36 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
               (m as ClaudeMessage).content === finalMsg.content &&
               Math.abs((m as ClaudeMessage).timestamp - finalMsg.timestamp) < 5000
             )) return prev
+            // Merge optimistic + main-process user bubble (same prompt, different suffix metadata)
+            if (
+              finalMsg.role === 'user' &&
+              typeof finalMsg.content === 'string'
+            ) {
+              let dupIdx = -1
+              for (let i = prev.length - 1; i >= 0; i--) {
+                const m = prev[i]
+                if (isToolCall(m)) continue
+                const mc = m as ClaudeMessage
+                if (mc.role !== 'user' || typeof mc.content !== 'string') continue
+                if (userBubbleCoreText(mc.content) !== userBubbleCoreText(finalMsg.content)) continue
+                if (Math.abs(mc.timestamp - finalMsg.timestamp) >= 8000) continue
+                dupIdx = i
+                break
+              }
+              if (dupIdx >= 0) {
+                const existing = prev[dupIdx] as ClaudeMessage
+                const merged: ClaudeMessage = {
+                  ...finalMsg,
+                  id: existing.id,
+                  timestamp: existing.timestamp,
+                  content:
+                    finalMsg.content.length >= existing.content.length
+                      ? finalMsg.content
+                      : existing.content,
+                }
+                return [...prev.slice(0, dupIdx), merged, ...prev.slice(dupIdx + 1)]
+              }
+            }
             return [...prev, finalMsg]
           })
           return ''
@@ -669,18 +945,32 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
           pendingPromptSentRef.current = true
           const prompt = t.pendingPrompt || ''
           const images = t.pendingImages
+          const forkCtxIds = t?.contextPackageIds?.filter(Boolean) ?? []
           workspaceStore.setTerminalPendingPrompt(sessionId, '')
           window.electronAPI?.debug?.log(`${tag} onHistory AUTO-SENDING pending prompt: "${prompt}" images=${images?.length ?? 0}`)
-          // Set history + user message together so it doesn't get overwritten
-          setMessages([...historyItems, {
-            id: `user-fork-${Date.now()}`,
-            sessionId,
-            role: 'user' as const,
-            content: prompt,
-            timestamp: Date.now(),
-          }])
-          setIsStreaming(true)
-          window.electronAPI.claude.sendMessage(sessionId, prompt, images)
+          void (async () => {
+            let pkgs: ContextPackage[] = []
+            try {
+              const list = await window.electronAPI.contextPackage.list()
+              if (Array.isArray(list)) pkgs = list as ContextPackage[]
+            } catch {
+              /* ignore */
+            }
+            const displayContent = buildUserBubbleContent(prompt, forkCtxIds, pkgs, images?.length ?? 0)
+            setMessages([
+              ...historyItems,
+              {
+                id: `user-fork-${Date.now()}`,
+                sessionId,
+                role: 'user' as const,
+                content: displayContent,
+                timestamp: Date.now(),
+              },
+            ])
+            setIsStreaming(true)
+            const sendOpts = forkCtxIds.length > 0 ? { contextPackageIds: forkCtxIds } : undefined
+            window.electronAPI.claude.sendMessage(sessionId, prompt, images, sendOpts)
+          })()
         } else {
           dlog2(`${tag} onHistory setting messages (history only, no pending prompt)`)
           setMessages(historyItems)
@@ -945,6 +1235,8 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
       return
     }
 
+    const term = workspaceStore.getState().terminals.find(t => t.id === sessionId)
+    const ctxIds = term?.contextPackageIds?.filter(Boolean) ?? []
     const imageDataUrls = attachedImages.map(i => i.dataUrl)
     clearInput()
     setAttachedImages([])
@@ -957,20 +1249,23 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
       setStreamingThinking('')
     }
 
-    // Add user message locally
-    const imageNote = imageDataUrls.length > 0
-      ? `\n[${imageDataUrls.length} image${imageDataUrls.length > 1 ? 's' : ''} attached]`
-      : ''
+    const displayContent = buildUserBubbleContent(trimmed, ctxIds, availableContextPkgs, imageDataUrls.length)
     setMessages(prev => [...prev, {
       id: `user-${Date.now()}`,
       sessionId,
       role: 'user' as const,
-      content: trimmed + imageNote,
+      content: displayContent,
       timestamp: Date.now(),
     }])
 
-    await window.electronAPI.claude.sendMessage(sessionId, trimmed, imageDataUrls.length > 0 ? imageDataUrls : undefined)
-  }, [isStreaming, sessionId, attachedImages, clearInput])
+    const sendOpts = ctxIds.length > 0 ? { contextPackageIds: ctxIds } : undefined
+    await window.electronAPI.claude.sendMessage(
+      sessionId,
+      trimmed,
+      imageDataUrls.length > 0 ? imageDataUrls : undefined,
+      sendOpts
+    )
+  }, [isStreaming, sessionId, attachedImages, clearInput, availableContextPkgs])
 
   const handleInterrupt = useCallback(() => {
     if (!isStreaming) return
@@ -1013,13 +1308,16 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
   }, [sessionId, isStreaming, isInterrupted])
 
   const permissionModes = ['default', 'acceptEdits', 'bypassPermissions', 'bypassPlan', 'plan'] as const
-  const permissionModeLabels: Record<string, string> = {
-    default: '\u270F Ask before edits',
-    acceptEdits: '\u270F Auto-accept edits',
-    bypassPermissions: '\u26A0 Bypass permissions',
-    bypassPlan: '\uD83D\uDCCB Plan (auto-approve)',
-    plan: '\uD83D\uDCCB Plan mode',
-  }
+  const permissionModeLabels: Record<string, string> = useMemo(
+    () => ({
+      default: t('claude.permissionModes.default'),
+      acceptEdits: t('claude.permissionModes.acceptEdits'),
+      bypassPermissions: t('claude.permissionModes.bypassPermissions'),
+      bypassPlan: t('claude.permissionModes.bypassPlan'),
+      plan: t('claude.permissionModes.plan'),
+    }),
+    [t]
+  )
 
   const handlePermissionModeCycle = useCallback(async () => {
     const allowBypass = settingsStore.getSettings().allowBypassPermissions
@@ -1300,6 +1598,34 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
           setTaskModal(null)
           return
         }
+        if (contextPkgPickerOpen) {
+          e.preventDefault()
+          setContextPkgPickerOpen(false)
+          return
+        }
+        if (contextPickMode) {
+          e.preventDefault()
+          setContextPickMode(false)
+          setContextPickedSegmentKeys([])
+          return
+        }
+        if (selectionPkgModal) {
+          if (!selectionPkgModal.saving) {
+            e.preventDefault()
+            setSelectionPkgModal(null)
+          }
+          return
+        }
+        if (chatSelectionBar) {
+          e.preventDefault()
+          setChatSelectionBar(null)
+          try {
+            window.getSelection()?.removeAllRanges()
+          } catch {
+            /* ignore */
+          }
+          return
+        }
         if (contentModal) {
           e.preventDefault()
           setContentModal(null)
@@ -1377,7 +1703,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
     }
     window.addEventListener('keydown', handleGlobalKeyDown)
     return () => window.removeEventListener('keydown', handleGlobalKeyDown)
-  }, [isActive, isStreaming, handleStop, pendingPermission, permissionFocus, handlePermissionSelect, showResumeList, showModelList, taskModal, contentModal, showFilePicker, filePickerPreview])
+  }, [isActive, isStreaming, handleStop, pendingPermission, permissionFocus, handlePermissionSelect, showResumeList, showModelList, taskModal, contextPkgPickerOpen, contextPickMode, selectionPkgModal, chatSelectionBar, contentModal, showFilePicker, filePickerPreview])
 
   const handleAskUserSubmit = useCallback(() => {
     if (!pendingQuestion) return
@@ -1577,6 +1903,90 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
     return (curTs - prevTs) > 30 * 60 * 1000
   }
 
+  const msgPickRowExtraClass = (msg: ClaudeMessage) => {
+    const on = contextPickMode && !taskModal && Boolean(msg.id)
+    if (!on) return ''
+    let picked = false
+    let splitAssistant = false
+    if (msg.role === 'user' || msg.role === 'system') {
+      picked = contextPickedSegmentKeys.includes(msg.id)
+    } else {
+      const hasT = Boolean(msg.thinking?.trim())
+      const hasC = Boolean((msg.content || '').trim())
+      splitAssistant = hasT && hasC
+      picked =
+        (hasT && contextPickedSegmentKeys.includes(`${msg.id}:thinking`)) ||
+        (hasC && contextPickedSegmentKeys.includes(`${msg.id}:content`))
+    }
+    return [
+      'tl-item-with-pick',
+      splitAssistant ? 'tl-item-pick-assistant-split' : '',
+      picked ? 'tl-item-picked' : '',
+    ]
+      .filter(Boolean)
+      .join(' ')
+  }
+
+  const renderMsgPickUI = (msg: ClaudeMessage) => {
+    if (!contextPickMode || taskModal || !msg.id) return null
+    if (msg.role === 'user' || msg.role === 'system') {
+      return (
+        <div className="claude-msg-pick-cells">
+          <label
+            className="claude-msg-pick-row"
+            onClick={e => e.stopPropagation()}
+            onMouseDown={e => e.stopPropagation()}
+          >
+            <input
+              type="checkbox"
+              checked={contextPickedSegmentKeys.includes(msg.id)}
+              onChange={() => toggleContextPickSegmentKey(msg.id)}
+              aria-label={t('claude.contextPickToggleAria')}
+            />
+            <span className="claude-msg-pick-row-label">{t('claude.contextPickSegmentWhole')}</span>
+          </label>
+        </div>
+      )
+    }
+    const hasT = Boolean(msg.thinking?.trim())
+    const hasC = Boolean((msg.content || '').trim())
+    if (!hasT && !hasC) return null
+    return (
+      <div className="claude-msg-pick-cells">
+        {hasT && (
+          <label
+            className="claude-msg-pick-row"
+            onClick={e => e.stopPropagation()}
+            onMouseDown={e => e.stopPropagation()}
+          >
+            <input
+              type="checkbox"
+              checked={contextPickedSegmentKeys.includes(`${msg.id}:thinking`)}
+              onChange={() => toggleContextPickSegmentKey(`${msg.id}:thinking`)}
+              aria-label={t('claude.contextPickSegmentThinkingAria')}
+            />
+            <span className="claude-msg-pick-row-label">{t('claude.contextPickSegmentThinking')}</span>
+          </label>
+        )}
+        {hasC && (
+          <label
+            className="claude-msg-pick-row"
+            onClick={e => e.stopPropagation()}
+            onMouseDown={e => e.stopPropagation()}
+          >
+            <input
+              type="checkbox"
+              checked={contextPickedSegmentKeys.includes(`${msg.id}:content`)}
+              onChange={() => toggleContextPickSegmentKey(`${msg.id}:content`)}
+              aria-label={t('claude.contextPickSegmentBodyAria')}
+            />
+            <span className="claude-msg-pick-row-label">{t('claude.contextPickSegmentBody')}</span>
+          </label>
+        )}
+      </div>
+    )
+  }
+
   const renderMessage = (item: MessageItem, index: number) => {
     if (isToolCall(item)) {
       // TodoWrite: render as a visual checklist
@@ -1607,7 +2017,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
             <div className={`tl-dot ${dotClass}`} />
             <div className="tl-content">
               <div className="claude-tool-header" onClick={() => toggleTool(item.id)}>
-                <span className="claude-tool-name">{item.toolName === 'ExitPlanMode' ? 'Exit Plan' : 'Enter Plan'}</span>
+                <span className="claude-tool-name">{item.toolName === 'ExitPlanMode' ? t('claude.exitPlan') : t('claude.enterPlan')}</span>
                 {item.timestamp > 0 && <span className="claude-tool-time" title={formatFullTimestamp(item.timestamp)}>{formatTimestamp(item.timestamp)}</span>}
               </div>
               {planPath && (
@@ -1785,7 +2195,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
             <div className={`tl-dot ${dotClass}`} />
             <div className="tl-content">
               <div className="claude-tool-header" onClick={() => toggleTool(item.id)}>
-                <span className="claude-tool-name">Edit</span>
+                <span className="claude-tool-name">{t('claude.toolNameEdit')}</span>
                 <span className="claude-tool-desc"><LinkedText text={filePath} /></span>
                 {item.timestamp > 0 && <span className="claude-tool-time" title={formatFullTimestamp(item.timestamp)}>{formatTimestamp(item.timestamp)}</span>}
               </div>
@@ -1849,7 +2259,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
             <div className={`tl-dot ${dotClass}`} />
             <div className="tl-content">
               <div className="claude-tool-header" onClick={() => toggleTool(item.id)}>
-                <span className="claude-tool-name">Write</span>
+                <span className="claude-tool-name">{t('claude.toolNameWrite')}</span>
                 <span className="claude-tool-desc"><LinkedText text={filePath} /></span>
                 {item.timestamp > 0 && <span className="claude-tool-time" title={formatFullTimestamp(item.timestamp)}>{formatTimestamp(item.timestamp)}</span>}
               </div>
@@ -1943,7 +2353,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
                     <div className="claude-task-result-text"><LinkedText text={resultText} /></div>
                   )}
                   {!isResultExpanded && isLongResult && (
-                    <div className="claude-plan-open-btn" onClick={() => setContentModal({ title: 'TaskOutput Result', content: resultText })}>
+                    <div className="claude-plan-open-btn" onClick={() => setContentModal({ title: t('claude.taskOutputResult'), content: resultText })}>
                       View result ({resultLines.length} lines)
                     </div>
                   )}
@@ -1979,7 +2389,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
               {item.timestamp > 0 && <span className="claude-tool-time" title={formatFullTimestamp(item.timestamp)}>{formatTimestamp(item.timestamp)}</span>}
             </div>
             {item.denyReason && (
-              <div className="claude-tool-reason">Reason: {item.denyReason}</div>
+              <div className="claude-tool-reason">{t('claude.reasonLabel')}{item.denyReason}</div>
             )}
             <div className="claude-tool-blocks">
               <div
@@ -2052,7 +2462,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
             {expandedTools.has(item.id) && (
               <div className="claude-tool-body">
                 <div className="claude-tool-input">
-                  <div className="claude-tool-label">Full Input</div>
+                  <div className="claude-tool-label">{t('claude.fullInput')}</div>
                   <pre>{JSON.stringify(item.input, null, 2)}</pre>
                 </div>
               </div>
@@ -2065,7 +2475,8 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
     const msg = item as ClaudeMessage
     if (msg.role === 'system') {
       return (
-        <div key={msg.id || index} className="tl-item tl-item-system">
+        <div key={msg.id || index} className={`tl-item tl-item-system ${msgPickRowExtraClass(msg)}`.trim()}>
+          {renderMsgPickUI(msg)}
           <div className="tl-dot dot-system" />
           <div className="tl-content claude-message-system">
             {msg.content}
@@ -2080,10 +2491,11 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
       return (
         <div
           key={msg.id || index}
-          className="tl-item tl-item-user"
+          className={`tl-item tl-item-user ${msgPickRowExtraClass(msg)}`.trim()}
           data-user-msg-id={msg.id}
           ref={(el) => setUserMsgRef(msg.id, el)}
         >
+          {renderMsgPickUI(msg)}
           <div className="tl-dot dot-user" />
           <div className="tl-content claude-message-user">
             {msg.content}
@@ -2096,7 +2508,8 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
     }
     // assistant
     return (
-      <div key={msg.id || index} className="tl-item">
+      <div key={msg.id || index} className={`tl-item ${msgPickRowExtraClass(msg)}`.trim()}>
+        {renderMsgPickUI(msg)}
         <div className="tl-dot dot-assistant" />
         <div className="tl-content claude-message-assistant">
           {msg.thinking && (() => {
@@ -2175,13 +2588,43 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
                 <button className="claude-task-stop-btn" onClick={(e) => {
                   e.stopPropagation()
                   window.electronAPI.claude.stopTask(sessionId, task.id)
-                }}>Stop</button>
+                }}>{t('claude.stop')}</button>
               </div>
             )
           })}
         </div>
       )}
-      <div className="claude-messages claude-timeline" ref={messagesContainerRef} onScroll={handleMessagesScroll}>
+      {contextPickMode && !taskModal && (
+        <div className="claude-context-pick-banner" role="region" aria-label={t('claude.contextPickModeActive')}>
+          <span className="claude-context-pick-hint">{t('claude.contextPickHint')}</span>
+          <span className="claude-context-pick-count">{t('claude.contextPickCount', { count: contextPickedSegmentKeys.length })}</span>
+          <div className="claude-context-pick-actions">
+            <button
+              type="button"
+              className="claude-context-pick-save"
+              disabled={contextPickedSegmentKeys.length === 0}
+              onClick={() => savePickedAsContextPackage()}
+            >
+              {t('claude.contextPickSave')}
+            </button>
+            <button
+              type="button"
+              className="claude-context-pick-done"
+              onClick={() => {
+                setContextPickMode(false)
+                setContextPickedSegmentKeys([])
+              }}
+            >
+              {t('claude.contextPickDone')}
+            </button>
+          </div>
+        </div>
+      )}
+      <div
+        className={`claude-messages claude-timeline${contextPickMode && !taskModal ? ' tl-context-pick-mode' : ''}`}
+        ref={messagesContainerRef}
+        onScroll={handleMessagesScroll}
+      >
         {(hasMoreArchived || isLoadingMore) && (
           <div className="claude-load-more">
             <button
@@ -2242,6 +2685,24 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
           </button>
         )}
       </div>
+
+      {chatSelectionBar && (
+        <div
+          className="claude-chat-selection-bar"
+          style={{ left: chatSelectionBar.left, top: chatSelectionBar.top }}
+          role="toolbar"
+          aria-label={t('claude.saveSelectionAsContext')}
+        >
+          <button
+            type="button"
+            className="claude-chat-selection-bar-btn"
+            onMouseDown={e => e.preventDefault()}
+            onClick={() => openSelectionPackageModal(chatSelectionBar.text)}
+          >
+            {t('claude.saveSelectionAsContext')}
+          </button>
+        </div>
+      )}
 
       {/* Permission Request Card — VS Code style vertical list */}
       {pendingPermission && (() => {
@@ -2385,9 +2846,9 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
         <div className="claude-resume-card">
           <div className="claude-permission-title">{t('claude.resumeSession')}</div>
           {resumeLoading ? (
-            <div className="claude-resume-empty">Loading sessions...</div>
+            <div className="claude-resume-empty">{t('claude.loadingSessions')}</div>
           ) : resumeSessions.length === 0 ? (
-            <div className="claude-resume-empty">No sessions found</div>
+            <div className="claude-resume-empty">{t('claude.noSessionsFound')}</div>
           ) : (
             <div className="claude-resume-list">
               {resumeSessions.map(s => (
@@ -2416,9 +2877,9 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
       {/* Model Selection List */}
       {showModelList && (
         <div className="claude-resume-card">
-          <div className="claude-permission-title">Select a model</div>
+          <div className="claude-permission-title">{t('claude.selectModel')}</div>
           {availableModels.length === 0 ? (
-            <div className="claude-resume-empty">No models available</div>
+            <div className="claude-resume-empty">{t('claude.noModelsAvailable')}</div>
           ) : (
             <div className="claude-resume-list">
               {availableModels.map(m => (
@@ -2447,7 +2908,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
               ref={filePickerInputRef}
               className="claude-file-picker-input"
               type="text"
-              placeholder="Search files by name..."
+              placeholder={t('claude.searchFilesByName')}
               value={filePickerQuery}
               onChange={e => setFilePickerQuery(e.target.value)}
               onKeyDown={e => {
@@ -2472,10 +2933,10 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
             />
             <div className="claude-file-picker-list">
               {!filePickerQuery.trim() && (
-                <div className="claude-file-picker-empty">Type to search files...</div>
+                <div className="claude-file-picker-empty">{t('claude.typeToSearchFiles')}</div>
               )}
               {filePickerQuery.trim() && filePickerResults.length === 0 && (
-                <div className="claude-file-picker-empty">No files found</div>
+                <div className="claude-file-picker-empty">{t('claude.noFilesFound')}</div>
               )}
               {filePickerResults.slice(0, 20).map((item, i) => {
                 const relPath = item.path.startsWith(cwd)
@@ -2514,6 +2975,91 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
       {/* Input area — hidden when permission card, ask-user card, or resume/model list is visible */}
       {!pendingPermission && !pendingQuestion && !showResumeList && !showModelList && (
       <div className={`claude-input-area${isDragOver ? ' drag-over' : ''}`}>
+        <div className="claude-context-pkgs" ref={contextPkgBrowseRef}>
+          <span className="claude-context-pkgs-label" title={t('claude.contextPackagesHint')}>
+            {t('claude.contextPackages')}
+          </span>
+          <div className="claude-context-pkgs-chips">
+            {attachedPkgIds.length === 0 ? (
+              <span className="claude-context-pkgs-empty">{t('claude.contextPackagesNoneAttached')}</span>
+            ) : (
+              attachedPkgIds.map(id => {
+                const p = availableContextPkgs.find(x => x.id === id)
+                if (!p) {
+                  return (
+                    <span key={id} className="claude-context-pkg-chip claude-context-pkg-chip--missing">
+                      {id.slice(0, 8)}…
+                      <button
+                        type="button"
+                        className="claude-context-pkg-chip-remove"
+                        aria-label={t('common.close')}
+                        onClick={() => removeAttachedContextPackage(id)}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  )
+                }
+                return (
+                  <span key={id} className="claude-context-pkg-chip" title={p.description || p.name}>
+                    <span className="claude-context-pkg-chip-name">{p.name}</span>
+                    <button
+                      type="button"
+                      className="claude-context-pkg-chip-remove"
+                      aria-label={t('common.close')}
+                      onClick={() => removeAttachedContextPackage(id)}
+                    >
+                      ×
+                    </button>
+                  </span>
+                )
+              })
+            )}
+          </div>
+          <div className="claude-context-pkgs-trailing">
+            <button
+              type="button"
+              className="claude-context-pkgs-browse"
+              onClick={() => setContextPkgPickerOpen(o => !o)}
+            >
+              {t('claude.contextPackagesBrowse')}
+            </button>
+            <button
+              type="button"
+              className={`claude-context-pkgs-pick${contextPickMode ? ' active' : ''}`}
+              title={contextPickMode ? t('claude.contextPickModeActive') : t('claude.contextPickMode')}
+              aria-pressed={contextPickMode}
+              onClick={() => {
+                if (contextPickMode) {
+                  setContextPickMode(false)
+                  setContextPickedSegmentKeys([])
+                } else {
+                  setContextPkgPickerOpen(false)
+                  setContextPickMode(true)
+                }
+              }}
+            >
+              {contextPickMode ? t('claude.contextPickModeActive') : t('claude.contextPickMode')}
+            </button>
+            <button
+              type="button"
+              className="claude-context-pkgs-refresh"
+              onClick={() => refreshContextPackages()}
+            >
+              {t('claude.contextPackagesRefresh')}
+            </button>
+          </div>
+        </div>
+        <ContextPackagePickerPopover
+          open={contextPkgPickerOpen}
+          anchorRef={contextPkgBrowseRef}
+          packages={availableContextPkgs}
+          workspaces={workspaces}
+          terminalWorkspaceId={workspaceId}
+          selectedIds={attachedPkgIds}
+          onClose={() => setContextPkgPickerOpen(false)}
+          onApply={ids => workspaceStore.setTerminalContextPackages(sessionId, ids)}
+        />
         {/* Prompt suggestion chip */}
         {promptSuggestion && !isStreaming && (
           <div className="claude-prompt-suggestion" onClick={() => {
@@ -2521,7 +3067,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
             setPromptSuggestion(null)
             textareaRef.current?.focus()
           }}>
-            <span className="claude-prompt-suggestion-label">Suggested <kbd>Tab</kbd>:</span>
+            <span className="claude-prompt-suggestion-label" dangerouslySetInnerHTML={{ __html: t('claude.suggestedKbd') }} />
             <span className="claude-prompt-suggestion-text">{promptSuggestion}</span>
           </div>
         )}
@@ -2548,7 +3094,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
           onInput={handleInputChange}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
-          placeholder={isInterrupted ? 'Type to continue, Esc to stop...' : isStreaming ? 'Press Esc to pause, double-Esc to stop...' : 'Type a message... (Enter to send, Shift+Tab to switch mode)'}
+          placeholder={isInterrupted ? t('claude.placeholderInterrupted') : isStreaming ? t('claude.placeholderStreaming') : t('claude.placeholderDefault')}
           disabled={false}
           rows={1}
         />
@@ -2582,7 +3128,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
             <span
               className={`claude-status-btn claude-mode-${permissionMode}`}
               onClick={handlePermissionModeCycle}
-              title={`Permission: ${permissionMode} (click to cycle)`}
+              title={t('claude.permissionClickToCycle', { mode: permissionMode })}
             >
               {permissionModeLabels[permissionMode] || permissionMode}
             </span>
@@ -2591,7 +3137,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
               <span
                 className="claude-status-btn"
                 onClick={() => setShowModelList(true)}
-                title={`Model: ${currentModel} (click to select)`}
+                title={t('claude.modelClickToSelect', { model: currentModel })}
               >
                 {'</>'} {currentModel}
               </span>
@@ -2602,10 +3148,10 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
               onChange={handleEffortChange}
               title={t('claude.effortLevel')}
             >
-              <option value="low">low</option>
-              <option value="medium">medium</option>
-              <option value="high">high</option>
-              <option value="max">max</option>
+              <option value="low">{t('claude.effortLow')}</option>
+              <option value="medium">{t('claude.effortMedium')}</option>
+              <option value="high">{t('claude.effortHigh')}</option>
+              <option value="max">{t('claude.effortMax')}</option>
             </select>
             {accountInfo?.organization && (
               <span className="claude-status-btn claude-account-info" title={`${accountInfo.email || ''} (${accountInfo.subscriptionType || 'unknown'})`}>
@@ -2667,6 +3213,145 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
         </div>
       )}
 
+      {selectionPkgModal && (
+        <div
+          className="claude-plan-overlay"
+          onClick={() => {
+            if (!selectionPkgModal.saving) setSelectionPkgModal(null)
+          }}
+        >
+          <div className="claude-plan-modal claude-context-from-chat-modal" onClick={e => e.stopPropagation()}>
+            <div className="claude-plan-modal-header">
+              <span className="claude-plan-modal-title">{t('claude.selectionPackageTitle')}</span>
+              <button
+                type="button"
+                className="claude-plan-modal-close"
+                disabled={selectionPkgModal.saving}
+                onClick={() => !selectionPkgModal.saving && setSelectionPkgModal(null)}
+              >
+                &times;
+              </button>
+            </div>
+            <div className="claude-context-from-chat-body platform-form">
+              {selectionPkgModal.err && <div className="claude-selection-form-error">{selectionPkgModal.err}</div>}
+              {selectionPkgModal.content.length > LARGE_SELECTION_CHARS && (
+                <p className="claude-selection-form-hint">
+                  {t('claude.selectionCharHint', { count: selectionPkgModal.content.length })}
+                </p>
+              )}
+              <label>
+                {t('platform.context.name')}
+                <input
+                  value={selectionPkgModal.name}
+                  disabled={selectionPkgModal.saving}
+                  onChange={e =>
+                    setSelectionPkgModal(p => (p ? { ...p, name: e.target.value, err: null } : null))
+                  }
+                  placeholder={t('platform.context.namePh')}
+                />
+              </label>
+              <label>
+                {t('platform.context.description')}
+                <input
+                  value={selectionPkgModal.description}
+                  disabled={selectionPkgModal.saving}
+                  onChange={e =>
+                    setSelectionPkgModal(p => (p ? { ...p, description: e.target.value } : null))
+                  }
+                />
+              </label>
+              <label>
+                {t('platform.context.tags')}
+                <input
+                  value={selectionPkgModal.tags}
+                  disabled={selectionPkgModal.saving}
+                  onChange={e => setSelectionPkgModal(p => (p ? { ...p, tags: e.target.value } : null))}
+                  placeholder={t('platform.context.tagsPh')}
+                />
+              </label>
+              <label>
+                {t('platform.context.content')}
+                <textarea
+                  rows={10}
+                  value={selectionPkgModal.content}
+                  disabled={selectionPkgModal.saving}
+                  onChange={e =>
+                    setSelectionPkgModal(p => (p ? { ...p, content: e.target.value } : null))
+                  }
+                />
+              </label>
+              <label className="platform-check-inline claude-selection-attach-row">
+                <input
+                  type="checkbox"
+                  checked={selectionPkgModal.attach}
+                  disabled={selectionPkgModal.saving}
+                  onChange={e =>
+                    setSelectionPkgModal(p => (p ? { ...p, attach: e.target.checked } : null))
+                  }
+                />
+                {t('claude.selectionAttachTab')}
+              </label>
+              <div className="claude-context-save-modal-actions">
+                <button
+                  type="button"
+                  className="claude-modal-btn claude-modal-btn--secondary"
+                  disabled={selectionPkgModal.saving}
+                  onClick={() => setSelectionPkgModal(null)}
+                >
+                  {t('common.cancel')}
+                </button>
+                <button
+                  type="button"
+                  className="claude-modal-btn claude-modal-btn--primary"
+                  disabled={selectionPkgModal.saving}
+                  onClick={async () => {
+                    const pkg = selectionPkgModal
+                    if (!pkg || pkg.saving) return
+                    if (!pkg.name.trim()) {
+                      setSelectionPkgModal({ ...pkg, err: t('claude.selectionNameRequired') })
+                      return
+                    }
+                    setSelectionPkgModal({ ...pkg, saving: true, err: null })
+                    try {
+                      const c = (await window.electronAPI.contextPackage.create({
+                        name: pkg.name.trim(),
+                        description: pkg.description.trim() || undefined,
+                        content: pkg.content,
+                        tags: pkg.tags
+                          ? pkg.tags
+                              .split(/[,，]/)
+                              .map(s => s.trim())
+                              .filter(Boolean)
+                          : undefined,
+                        workspaceRoot: defaultPackageWorkspaceRoot,
+                      })) as ContextPackage | null
+                      if (c?.id) {
+                        refreshContextPackages()
+                        if (pkg.attach) {
+                          const term = workspaceStore.getState().terminals.find(t => t.id === sessionId)
+                          const existing = term?.contextPackageIds ?? []
+                          const next = existing.includes(c.id) ? existing : [...existing, c.id]
+                          workspaceStore.setTerminalContextPackages(sessionId, next)
+                        }
+                        window.electronAPI.debug.log(`[renderer] context package from chat selection: ${c.id} "${c.name}"`)
+                        setSelectionPkgModal(null)
+                      } else {
+                        setSelectionPkgModal({ ...pkg, saving: false, err: t('claude.selectionSaveFailed') })
+                      }
+                    } catch (err) {
+                      window.electronAPI.debug.log(`[renderer] context package from selection error: ${String(err)}`)
+                      setSelectionPkgModal({ ...pkg, saving: false, err: t('claude.selectionSaveFailed') })
+                    }
+                  }}
+                >
+                  {selectionPkgModal.saving ? t('claude.selectionSaving') : t('platform.context.save')}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Subagent Modal */}
       {taskModal && (() => {
         const taskMsgs = subagentMessagesRef.current.get(taskModal.taskId) || []
@@ -2682,11 +3367,11 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
             <div className="claude-plan-modal claude-subagent-modal" onClick={e => e.stopPropagation()}>
               <div className="claude-plan-modal-header">
                 {isRunning && <span className="claude-active-task-dot" />}
-                <span className="claude-tool-name" style={{ marginRight: 4 }}>Task</span>
+                <span className="claude-tool-name" style={{ marginRight: 4 }}>{t('claude.subagentTask')}</span>
                 {taskModal.subagentType && <span className="claude-tool-badge" style={{ marginRight: 6 }}>{taskModal.subagentType}</span>}
                 <span className="claude-plan-modal-title">{taskModal.label}</span>
                 <span className="claude-subagent-meta">
-                  {taskMsgs.length} messages
+                  {t('claude.subagentMessageCount', { count: taskMsgs.length })}
                   {parentTask && parentTask.timestamp > 0 ? ` · ${formatElapsed(parentTask.timestamp)}` : ''}
                 </span>
                 <button className="claude-plan-modal-close" onClick={() => setTaskModal(null)}>&times;</button>
@@ -2742,20 +3427,20 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
           <div className="claude-plan-overlay" onClick={() => setShowPromptHistory(false)}>
             <div className="claude-plan-modal claude-prompt-history-modal" onClick={e => e.stopPropagation()}>
               <div className="claude-plan-modal-header">
-                <span className="claude-plan-modal-title">Prompt History ({userPrompts.length})</span>
+                <span className="claude-plan-modal-title">{t('claude.promptHistory', { count: userPrompts.length })}</span>
                 <button
                   className="claude-prompt-history-copy"
                   onClick={() => {
-                    const text = userPrompts.map((m, i) => `--- Prompt ${i + 1} ---\n${m.content}`).join('\n\n')
+                    const text = userPrompts.map((m, i) => `${t('claude.promptExportLine', { n: i + 1 })}\n${m.content}`).join('\n\n')
                     navigator.clipboard.writeText(text)
                   }}
                   title={t('claude.copyAllPrompts')}
-                >copy all</button>
+                >{t('claude.copyAll')}</button>
                 <button className="claude-plan-modal-close" onClick={() => setShowPromptHistory(false)}>&times;</button>
               </div>
               <div className="claude-prompt-history-list">
                 {userPrompts.length === 0 ? (
-                  <div className="claude-prompt-history-empty">No prompts yet</div>
+                  <div className="claude-prompt-history-empty">{t('claude.noPromptsYet')}</div>
                 ) : userPrompts.map((m, i) => (
                   <div key={m.id} className="claude-prompt-history-item">
                     <div className="claude-prompt-history-header">
@@ -2765,7 +3450,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
                         className="claude-prompt-history-copy-one"
                         onClick={() => navigator.clipboard.writeText(m.content)}
                         title={t('claude.copyThisPrompt')}
-                      >copy</button>
+                      >{t('claude.copyPrompt')}</button>
                     </div>
                     <pre className="claude-prompt-history-content">{m.content}</pre>
                   </div>

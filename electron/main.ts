@@ -60,6 +60,11 @@ import { RemoteServer } from './remote/remote-server'
 import { RemoteClient } from './remote/remote-client'
 import { getConnectionInfo } from './remote/tunnel-manager'
 import { logger } from './logger'
+import { AutomationScheduler } from './automation-scheduler'
+import * as contextPackageStore from './context-package-store'
+import * as analyticsStore from './analytics-store'
+import { listAutomationJobs, saveAutomationJobs } from './automation-jobs'
+import type { AutomationJob } from '../src/types/platform-extensions'
 
 // Startup timing — capture module load time before anything else
 const _processStart = Number(process.env._BAT_T0 || Date.now())
@@ -94,6 +99,7 @@ if (process.platform === 'win32') {
 let mainWindow: BrowserWindow | null = null
 let ptyManager: PtyManager | null = null
 let claudeManager: ClaudeAgentManager | null = null
+let automationScheduler: AutomationScheduler | null = null
 let updateCheckResult: UpdateCheckResult | null = null
 const profileManager = new ProfileManager()
 const remoteServer = new RemoteServer()
@@ -243,6 +249,8 @@ function createWindow() {
 
   ptyManager = new PtyManager(getAllWindows)
   claudeManager = new ClaudeAgentManager(getAllWindows)
+  automationScheduler = new AutomationScheduler(() => claudeManager)
+  automationScheduler.start()
 
   if (VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(VITE_DEV_SERVER_URL)
@@ -266,10 +274,12 @@ function createWindow() {
 function cleanupAllProcesses() {
   try { remoteClient?.disconnect() } catch { /* ignore */ }
   try { remoteServer.stop() } catch { /* ignore */ }
+  try { automationScheduler?.stop() } catch { /* ignore */ }
   try { claudeManager?.killAll() } catch { /* ignore */ }
   try { claudeManager?.dispose() } catch { /* ignore */ }
   try { ptyManager?.dispose() } catch { /* ignore */ }
   remoteClient = null
+  automationScheduler = null
   claudeManager = null
   ptyManager = null
 }
@@ -442,7 +452,15 @@ function registerProxiedHandlers() {
 
   // Claude Agent SDK
   registerHandler('claude:start-session', (sessionId: string, options: { cwd: string; prompt?: string; permissionMode?: string; model?: string }) => claudeManager?.startSession(sessionId, options))
-  registerHandler('claude:send-message', (sessionId: string, prompt: string, images?: string[]) => claudeManager?.sendMessage(sessionId, prompt, images))
+  registerHandler(
+    'claude:send-message',
+    (
+      sessionId: string,
+      prompt: string,
+      images?: string[],
+      options?: { contextPackageIds?: string[]; analyticsSource?: 'user' | 'automation' }
+    ) => claudeManager?.sendMessage(sessionId, prompt, images, options)
+  )
   registerHandler('claude:stop-session', (sessionId: string) => claudeManager?.stopSession(sessionId))
   registerHandler('claude:set-permission-mode', (sessionId: string, mode: string) => claudeManager?.setPermissionMode(sessionId, mode as import('@anthropic-ai/claude-agent-sdk').PermissionMode))
   registerHandler('claude:set-model', (sessionId: string, model: string) => claudeManager?.setModel(sessionId, model))
@@ -888,6 +906,33 @@ function registerProxiedHandlers() {
   registerHandler('snippet:search', (query: string) => snippetDb.search(query))
   registerHandler('snippet:getCategories', () => snippetDb.getCategories())
   registerHandler('snippet:getFavorites', () => snippetDb.getFavorites())
+
+  // Context packages, analytics, automation (platform extensions)
+  registerHandler('contextPackage:list', () => contextPackageStore.listContextPackages())
+  registerHandler('contextPackage:get', (id: string) => contextPackageStore.getContextPackage(id))
+  registerHandler(
+    'contextPackage:create',
+    (input: { name: string; description?: string; content: string; tags?: string[]; workspaceRoot?: string }) =>
+      contextPackageStore.createContextPackage(input)
+  )
+  registerHandler(
+    'contextPackage:update',
+    (
+      id: string,
+      updates: Partial<{ name: string; description?: string; content: string; tags?: string[]; workspaceRoot?: string }>
+    ) => contextPackageStore.updateContextPackage(id, updates)
+  )
+  registerHandler('contextPackage:delete', (id: string) => contextPackageStore.deleteContextPackage(id))
+
+  registerHandler('analytics:getSummary', () => analyticsStore.getAnalyticsSummary())
+
+  registerHandler('automation:list', () => listAutomationJobs())
+  registerHandler('automation:saveAll', (jobs: AutomationJob[]) => saveAutomationJobs(jobs))
+  registerHandler(
+    'automation:runNow',
+    async (id: string) =>
+      automationScheduler?.runOneJobById(id) ?? { ok: false, error: 'Scheduler not ready' }
+  )
 
   // Profile (subset exposed to remote clients)
   registerHandler('profile:list', () => profileManager.list())

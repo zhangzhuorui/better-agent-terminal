@@ -1,13 +1,19 @@
 import type { AppSettings, ShellType, FontType, ColorPresetId, EnvVariable, AgentCommandType, StatuslineItemConfig, StatuslineItemId, LanguageCode } from '../types'
 import type { AgentPresetId } from '../types/agent-presets'
 import { FONT_OPTIONS, COLOR_PRESETS, AGENT_COMMAND_OPTIONS, STATUSLINE_ITEMS } from '../types'
+import { detectBrowserLanguage } from '../i18n'
+import { applyAppTheme } from '../utils/apply-app-theme'
 
 type Listener = () => void
 
 const isWindows = typeof navigator !== 'undefined' && navigator.userAgent.includes('Windows');
 
+function defaultLanguage(): LanguageCode {
+  return detectBrowserLanguage()
+}
+
 const defaultSettings: AppSettings = {
-  language: 'en',
+  language: defaultLanguage(),
   shell: 'auto',
   customShellPath: '',
   fontSize: 14,
@@ -72,6 +78,7 @@ class SettingsStore {
 
   setTheme(theme: 'dark' | 'light'): void {
     this.settings = { ...this.settings, theme }
+    applyAppTheme(theme)
     this.notify()
     this.save()
   }
@@ -277,12 +284,24 @@ class SettingsStore {
     const data = await window.electronAPI.settings.load()
     if (data) {
       try {
-        const parsed = JSON.parse(data)
+        const parsed = JSON.parse(data) as Partial<AppSettings>
+        const allowed: LanguageCode[] = ['en', 'zh-TW', 'zh-CN']
+        if (parsed.language !== undefined && !allowed.includes(parsed.language)) {
+          parsed.language = defaultLanguage()
+        }
         this.settings = { ...defaultSettings, ...parsed }
+        const th = this.settings.theme === 'light' ? 'light' : 'dark'
+        this.settings = { ...this.settings, theme: th }
+        applyAppTheme(th)
         this.notify()
       } catch (e) {
         console.error('Failed to parse settings:', e)
+        this.settings = { ...defaultSettings }
+        applyAppTheme('dark')
+        this.notify()
       }
+    } else {
+      applyAppTheme(this.settings.theme === 'light' ? 'light' : 'dark')
     }
   }
 }

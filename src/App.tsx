@@ -10,6 +10,7 @@ import { SnippetSidebar } from './components/SnippetPanel'
 import { WorkspaceEnvDialog } from './components/WorkspaceEnvDialog'
 import { ResizeHandle } from './components/ResizeHandle'
 import { ProfilePanel } from './components/ProfilePanel'
+import { PlatformHubPanel } from './components/PlatformHubPanel'
 import type { AppState, EnvVariable } from './types'
 
 // Panel settings interface
@@ -60,9 +61,10 @@ function savePanelSettings(settings: PanelSettings): void {
 }
 
 export default function App() {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const [state, setState] = useState<AppState>(workspaceStore.getState())
   const [showSettings, setShowSettings] = useState(false)
+  const [showPlatformHub, setShowPlatformHub] = useState(false)
   const [showProfiles, setShowProfiles] = useState(false)
   const [activeProfileName, setActiveProfileName] = useState<string>('Default')
   const [isRemoteConnected, setIsRemoteConnected] = useState(false)
@@ -78,10 +80,10 @@ export default function App() {
   // Track workspaces that have been visited (for lazy mounting)
   const [mountedWorkspaces, setMountedWorkspaces] = useState<Set<string>>(new Set())
 
-  // Sync window title with active profile
+  // Sync window title with active profile and language
   useEffect(() => {
-    document.title = `Better Agent Terminal - ${activeProfileName}`
-  }, [activeProfileName])
+    document.title = t('app.windowTitle', { profile: activeProfileName })
+  }, [activeProfileName, t, i18n.language])
 
   // Lazy mount: only render a workspace's terminals once it has been activated
   useEffect(() => {
@@ -442,6 +444,7 @@ export default function App() {
         activeProfileName={activeProfileName}
         isRemoteConnected={isRemoteConnected}
         onOpenProfiles={() => setShowProfiles(true)}
+        onOpenPlatformHub={() => setShowPlatformHub(true)}
         onOpenSettings={() => setShowSettings(true)}
       />
       <ResizeHandle
@@ -489,6 +492,9 @@ export default function App() {
       />
       {showSettings && (
         <SettingsPanel onClose={() => setShowSettings(false)} />
+      )}
+      {showPlatformHub && (
+        <PlatformHubPanel onClose={() => setShowPlatformHub(false)} />
       )}
       {showProfiles && (
         <ProfilePanel onClose={() => setShowProfiles(false)} onSwitch={handleProfileSwitch} onSwitchNewWindow={handleProfileNewWindow} />

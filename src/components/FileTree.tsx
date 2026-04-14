@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
 import { HighlightedCode } from './PathLinker'
 import hljs from 'highlight.js/lib/core'
 
@@ -240,6 +241,7 @@ function MarkdownPreview({ content }: { content: string }) {
 }
 
 function FilePreview({ filePath, fileName, refreshKey }: { filePath: string; fileName: string; refreshKey: number }) {
+  const { t } = useTranslation()
   const [content, setContent] = useState<string | null>(null)
   const [imageUrl, setImageUrl] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -272,19 +274,19 @@ function FilePreview({ filePath, fileName, refreshKey }: { filePath: string; fil
         setLoading(false)
       }).catch(() => {
         if (cancelled) return
-        setError('Failed to load image')
+        setError(t('fileTree.previewLoadImageFailed'))
         setLoading(false)
       })
     } else {
-      setError('Preview not available for this file type')
+      setError(t('fileTree.previewNotAvailable'))
       setLoading(false)
     }
 
     return () => { cancelled = true }
-  }, [filePath, fileName, refreshKey])
+  }, [filePath, fileName, refreshKey, t])
 
   if (loading) {
-    return <div className="file-preview-status">Loading...</div>
+    return <div className="file-preview-status">{t('fileTree.loading')}</div>
   }
 
   if (error) {
@@ -304,8 +306,8 @@ function FilePreview({ filePath, fileName, refreshKey }: { filePath: string; fil
       <>
         {isMarkdown && (
           <div className="file-preview-mode-bar">
-            <button className={`git-diff-mode-btn${viewMode === 'rendered' ? ' active' : ''}`} onClick={() => setViewMode('rendered')}>Preview</button>
-            <button className={`git-diff-mode-btn${viewMode === 'source' ? ' active' : ''}`} onClick={() => setViewMode('source')}>Source</button>
+            <button className={`git-diff-mode-btn${viewMode === 'rendered' ? ' active' : ''}`} onClick={() => setViewMode('rendered')}>{t('fileTree.preview')}</button>
+            <button className={`git-diff-mode-btn${viewMode === 'source' ? ' active' : ''}`} onClick={() => setViewMode('source')}>{t('fileTree.source')}</button>
           </div>
         )}
         {isMarkdown && viewMode === 'rendered'
@@ -320,6 +322,7 @@ function FilePreview({ filePath, fileName, refreshKey }: { filePath: string; fil
 }
 
 export function FileTree({ rootPath }: Readonly<FileTreeProps>) {
+  const { t } = useTranslation()
   const [entries, setEntries] = useState<FileEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedFile, setSelectedFile] = useState<FileEntry | null>(null)
@@ -463,11 +466,11 @@ export function FileTree({ rootPath }: Readonly<FileTreeProps>) {
   }, [contextMenu])
 
   if (loading && entries.length === 0) {
-    return <div className="file-tree-empty">Loading...</div>
+    return <div className="file-tree-empty">{t('fileTree.loading')}</div>
   }
 
   if (entries.length === 0) {
-    return <div className="file-tree-empty">No files found</div>
+    return <div className="file-tree-empty">{t('fileTree.noFiles')}</div>
   }
 
   const displayEntries = searchResults !== null ? searchResults : entries
@@ -479,14 +482,14 @@ export function FileTree({ rootPath }: Readonly<FileTreeProps>) {
           <input
             className="file-tree-search"
             type="text"
-            placeholder="Search files..."
+            placeholder={t('fileTree.searchPlaceholder')}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
           />
-          <button className="file-tree-refresh-btn" onClick={handleRefresh} title="Refresh">↻</button>
+          <button className="file-tree-refresh-btn" onClick={handleRefresh} title={t('fileTree.refresh')}>↻</button>
         </div>
         <div className="file-tree-list">
-          {searching && <div className="file-tree-item file-tree-loading-row">Searching...</div>}
+          {searching && <div className="file-tree-item file-tree-loading-row">{t('fileTree.searching')}</div>}
           {searchResults !== null ? (
             // Search results: flat list with relative paths
             displayEntries.map(entry => (
@@ -516,7 +519,7 @@ export function FileTree({ rootPath }: Readonly<FileTreeProps>) {
             ))
           )}
           {searchResults !== null && searchResults.length === 0 && !searching && (
-            <div className="file-tree-empty">No matches</div>
+            <div className="file-tree-empty">{t('fileTree.noMatches')}</div>
           )}
         </div>
       </div>
@@ -525,14 +528,14 @@ export function FileTree({ rootPath }: Readonly<FileTreeProps>) {
           <>
             <div className="file-preview-header">
               <span className="file-preview-filename">{selectedFile.name}</span>
-              <button className="file-tree-refresh-btn" onClick={handleRefresh} title="Refresh">↻</button>
+              <button className="file-tree-refresh-btn" onClick={handleRefresh} title={t('fileTree.refresh')}>↻</button>
             </div>
             <div className="file-preview-body">
               <FilePreview filePath={selectedFile.path} fileName={selectedFile.name} refreshKey={refreshKey} />
             </div>
           </>
         ) : (
-          <div className="file-preview-status">Select a file to preview</div>
+          <div className="file-preview-status">{t('fileTree.selectFilePreview')}</div>
         )}
       </div>
 

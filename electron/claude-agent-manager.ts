@@ -7,10 +7,12 @@ import type { ClaudeMessage, ClaudeToolCall, ClaudeSessionState } from '../src/t
 import type { Query, PermissionMode, CanUseTool, SlashCommand } from '@anthropic-ai/claude-agent-sdk'
 import { logger } from './logger'
 import { getNodeExecutable, isElectronFallback } from './node-resolver'
+import * as analyticsStore from './analytics-store'
+import { formatContextPackagesForPrompt, getContextPackagesByIds } from './context-package-store'
 
 // App-level permission mode extends SDK's PermissionMode with bypassPlan
 // bypassPlan = plan mode (read-only exploration) + auto-approve all tool permissions
-type AppPermissionMode = PermissionMode | 'bypassPlan'
+type AppPermissionMode = PermissionMode | 'bypassPlan' | 'bypassPermissions'
 import { broadcastHub } from './remote/broadcast-hub'
 
 // Lazy import the SDK (it's an ES module)
@@ -330,7 +332,12 @@ export class ClaudeAgentManager {
     }
   }
 
-  async sendMessage(sessionId: string, prompt: string, images?: string[]): Promise<boolean> {
+  async sendMessage(
+    sessionId: string,
+    prompt: string,
+    images?: string[],
+    options?: { contextPackageIds?: string[]; analyticsSource?: 'user' | 'automation' }
+  ): Promise<boolean> {
     const session = this.sessions.get(sessionId)
     if (!session) {
       this.send('claude:error', sessionId, 'Session not found')
@@ -341,6 +348,16 @@ export class ClaudeAgentManager {
     if (session.isResting) {
       session.isResting = false
     }
+
+    void analyticsStore
+      .recordUserMessage(options?.analyticsSource === 'automation' ? 'automation' : 'user')
+      .catch(e => logger.warn('[analytics] recordUserMessage', e))
+
+    const pkgIds = options?.contextPackageIds?.filter(Boolean) ?? []
+    const packages = pkgIds.length > 0 ? await getContextPackagesByIds(pkgIds) : []
+    const queryPrompt = packages.length > 0 ? formatContextPackagesForPrompt(packages, prompt) : prompt
+    const pkgNote =
+      packages.length > 0 ? `\n[附加上下文包: ${packages.map(p => p.name).join(', ')}]` : ''
 
     if (session.state.isStreaming) {
       // Abort current query and immediately send the new message
@@ -353,7 +370,9 @@ export class ClaudeAgentManager {
       const contextualPrompt = abortedPrompt && abortedPrompt !== prompt
         ? `[使用者先前的訊息（已中斷）: "${abortedPrompt}"]\n\n${prompt}`
         : prompt
-      session.messageQueue.push({ prompt: contextualPrompt, images })
+      const queuedQuery =
+        packages.length > 0 ? formatContextPackagesForPrompt(packages, contextualPrompt) : contextualPrompt
+      session.messageQueue.push({ prompt: queuedQuery, images })
       return true
     }
 
@@ -363,12 +382,15 @@ export class ClaudeAgentManager {
       id: `user-${Date.now()}`,
       sessionId,
       role: 'user',
-      content: prompt + (images?.length ? `\n[${images.length} image${images.length > 1 ? 's' : ''} attached]` : ''),
+      content:
+        prompt +
+        pkgNote +
+        (images?.length ? `\n[${images.length} image${images.length > 1 ? 's' : ''} attached]` : ''),
       timestamp: Date.now(),
     }
     this.addMessage(sessionId, userMsg)
 
-    await this.runQuery(sessionId, prompt, images)
+    await this.runQuery(sessionId, queryPrompt, images)
     return true
   }
 
@@ -925,6 +947,14 @@ export class ClaudeAgentManager {
             result: resultMsg.result,
             errors: resultMsg.errors,
           })
+
+          void analyticsStore
+            .recordAgentTurn(sessionId, {
+              inputTokens: session.metadata.inputTokens,
+              outputTokens: session.metadata.outputTokens,
+              totalCost: session.metadata.totalCost,
+            })
+            .catch(e => logger.warn('[analytics] recordAgentTurn', e))
 
           // Send system notification on agent completion
           this.sendCompletionNotification(session, resultMsg.result)
@@ -1535,6 +1565,8 @@ export class ClaudeAgentManager {
     try { session.queryInstance?.close() } catch { /* ignore */ }
     this.sessions.delete(sessionId)
     sdkSessionIds.delete(sessionId)
+
+    void analyticsStore.resetSessionBaseline(sessionId).catch(e => logger.warn('[analytics] reset baseline', e))
 
     // Start a fresh session preserving settings
     const ok = await this.startSession(sessionId, { cwd, permissionMode })

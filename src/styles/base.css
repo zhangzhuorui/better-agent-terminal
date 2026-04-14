@@ -26,6 +26,38 @@
   --radius-sm: 6px;
   --radius-md: 12px;
   --radius-lg: 16px;
+  --warning-color: #e8a838;
+}
+
+/* App interface light theme (see settingsStore.theme + apply-app-theme.ts) */
+:root[data-theme='light'] {
+  --bg-primary: #f8f8f8;
+  --bg-secondary: #ffffff;
+  --bg-tertiary: #ececec;
+  --bg-hover: #e0e0e0;
+  --text-primary: #1e1e1e;
+  --text-secondary: #5c5c5c;
+  --border-color: #d4d4d4;
+  --accent-color: #006cbd;
+  --accent-hover: #005a9e;
+  --claude-accent: #b45309;
+  --danger-color: #c62828;
+  --glass-bg: rgba(255, 255, 255, 0.92);
+  --glass-border: rgba(0, 0, 0, 0.08);
+  --warning-color: #b45309;
+}
+
+:root[data-theme='light'] .xterm-viewport::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.18);
+}
+
+:root[data-theme='light'] .xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.28);
+}
+
+/* Claude panel: soften orange wash on light background */
+:root[data-theme='light'] .claude-active-tasks {
+  background: linear-gradient(180deg, rgba(217, 119, 6, 0.07) 0%, var(--bg-primary) 100%);
 }
 
 html,
