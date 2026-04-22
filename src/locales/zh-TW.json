@@ -486,6 +486,22 @@
     }
   },
 
+  "contentSearch": {
+    "placeholder": "搜尋訊息與上下文包...",
+    "all": "全部",
+    "messages": "訊息",
+    "packages": "上下文包",
+    "user": "使用者",
+    "assistant": "助理",
+    "system": "系統",
+    "tool": "工具",
+    "package": "上下文包",
+    "searching": "搜尋中...",
+    "noResults": "找不到結果",
+    "typeToSearch": "輸入關鍵字開始搜尋",
+    "resultCount": "共 {{count}} 筆結果"
+  },
+
   "promptBox": {
     "placeholder": "在此輸入您的提示...",
     "placeholderWithImage": "新增文字（選填），Ctrl+Enter 傳送",

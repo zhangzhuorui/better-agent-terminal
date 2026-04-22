@@ -486,6 +486,22 @@
     }
   },
 
+  "contentSearch": {
+    "placeholder": "Search messages and context packages...",
+    "all": "All",
+    "messages": "Messages",
+    "packages": "Packages",
+    "user": "User",
+    "assistant": "Assistant",
+    "system": "System",
+    "tool": "Tool",
+    "package": "Package",
+    "searching": "Searching...",
+    "noResults": "No results found",
+    "typeToSearch": "Type to search",
+    "resultCount": "{{count}} results"
+  },
+
   "promptBox": {
     "placeholder": "Type your prompt here...",
     "placeholderWithImage": "Add text (optional), Ctrl+Enter to send",

@@ -924,6 +924,14 @@ function registerProxiedHandlers() {
   )
   registerHandler('contextPackage:delete', (id: string) => contextPackageStore.deleteContextPackage(id))
 
+  // Content search (messages + context packages)
+  registerHandler('contentSearch:session-messages', (sessionId: string, query: string) =>
+    claudeManager?.searchSessionMessages(sessionId, query) ?? []
+  )
+  registerHandler('contentSearch:context-packages', (query: string) =>
+    contextPackageStore.searchContextPackages(query)
+  )
+
   registerHandler('analytics:getSummary', () => analyticsStore.getAnalyticsSummary())
 
   registerHandler('automation:list', () => listAutomationJobs())
