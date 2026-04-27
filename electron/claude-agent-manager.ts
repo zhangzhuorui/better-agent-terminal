@@ -1654,6 +1654,109 @@ export class ClaudeAgentManager {
     return { newSdkSessionId }
   }
 
+  async searchSessionMessages(sessionId: string, query: string): Promise<Array<{
+    id: string
+    role?: 'user' | 'assistant' | 'system'
+    toolName?: string
+    snippet: string
+    timestamp: number
+    fullContent: string
+  }>> {
+    const term = query.trim().toLowerCase()
+    if (!term) return []
+
+    type ResultItem = {
+      id: string
+      role?: 'user' | 'assistant' | 'system'
+      toolName?: string
+      snippet: string
+      timestamp: number
+      fullContent: string
+    }
+    const results: ResultItem[] = []
+
+    // Search in-memory messages
+    const session = this.sessions.get(sessionId)
+    if (session) {
+      for (const msg of session.state.messages) {
+        if ('toolName' in msg) {
+          const tool = msg as ClaudeToolCall
+          const texts = [
+            tool.toolName,
+            tool.result || '',
+            JSON.stringify(tool.input),
+          ]
+          const combined = texts.join(' ')
+          if (combined.toLowerCase().includes(term)) {
+            results.push({
+              id: tool.id,
+              toolName: tool.toolName,
+              snippet: extractSnippet(combined, term, 120),
+              timestamp: tool.timestamp,
+              fullContent: combined,
+            })
+          }
+        } else {
+          const m = msg as ClaudeMessage
+          const texts = [m.content]
+          if (m.thinking) texts.push(m.thinking)
+          const combined = texts.join('\n')
+          if (combined.toLowerCase().includes(term)) {
+            results.push({
+              id: m.id,
+              role: m.role,
+              snippet: extractSnippet(combined, term, 120),
+              timestamp: m.timestamp,
+              fullContent: combined,
+            })
+          }
+        }
+      }
+    }
+
+    // Search archived messages
+    const archivePath = pathModule.join(app.getPath('userData'), 'message-archives', `${sessionId}.jsonl`)
+    try {
+      const content = await fsPromises.readFile(archivePath, 'utf-8')
+      const lines = content.trim().split('\n').filter(Boolean)
+      for (const line of lines) {
+        const msg = JSON.parse(line) as ClaudeMessage | ClaudeToolCall
+        if ('toolName' in msg) {
+          const tool = msg as ClaudeToolCall
+          const texts = [tool.toolName, tool.result || '', JSON.stringify(tool.input)]
+          const combined = texts.join(' ')
+          if (combined.toLowerCase().includes(term)) {
+            results.push({
+              id: tool.id,
+              toolName: tool.toolName,
+              snippet: extractSnippet(combined, term, 120),
+              timestamp: tool.timestamp,
+              fullContent: combined,
+            })
+          }
+        } else {
+          const m = msg as ClaudeMessage
+          const texts = [m.content]
+          if (m.thinking) texts.push(m.thinking)
+          const combined = texts.join('\n')
+          if (combined.toLowerCase().includes(term)) {
+            results.push({
+              id: m.id,
+              role: m.role,
+              snippet: extractSnippet(combined, term, 120),
+              timestamp: m.timestamp,
+              fullContent: combined,
+            })
+          }
+        }
+      }
+    } catch {
+      // Archive file may not exist
+    }
+
+    return results
+  }
+
   dispose() {
     for (const [id, session] of this.sessions) {
       this.stopSession(id)
@@ -1667,4 +1770,16 @@ export class ClaudeAgentManager {
     this.sessions.clear()
     sdkSessionIds.clear()
   }
+}
+
+function extractSnippet(text: string, term: string, maxLen: number): string {
+  const lower = text.toLowerCase()
+  const idx = lower.indexOf(term)
+  if (idx === -1) return text.slice(0, maxLen)
+  const start = Math.max(0, idx - maxLen / 2)
+  const end = Math.min(text.length, idx + term.length + maxLen / 2)
+  let snippet = text.slice(start, end)
+  if (start > 0) snippet = '...' + snippet
+  if (end < text.length) snippet = snippet + '...'
+  return snippet
 }

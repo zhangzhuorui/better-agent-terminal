@@ -301,6 +301,10 @@ const electronAPI = {
     search: (query: string) => ipcRenderer.invoke('snippet:search', query),
     getCategories: () => ipcRenderer.invoke('snippet:getCategories'),
     getFavorites: () => ipcRenderer.invoke('snippet:getFavorites')
+  },
+  contentSearch: {
+    searchMessages: (sessionId: string, query: string) => ipcRenderer.invoke('contentSearch:session-messages', sessionId, query),
+    searchContextPackages: (query: string) => ipcRenderer.invoke('contentSearch:context-packages', query),
   }
 }
 

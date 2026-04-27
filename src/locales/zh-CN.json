@@ -491,6 +491,22 @@
     }
   },
 
+  "contentSearch": {
+    "placeholder": "搜索消息和上下文包...",
+    "all": "全部",
+    "messages": "消息",
+    "packages": "上下文包",
+    "user": "用户",
+    "assistant": "助手",
+    "system": "系统",
+    "tool": "工具",
+    "package": "上下文包",
+    "searching": "搜索中...",
+    "noResults": "未找到结果",
+    "typeToSearch": "输入关键词开始搜索",
+    "resultCount": "共 {{count}} 条结果"
+  },
+
   "promptBox": {
     "placeholder": "在此输入您的提示...",
     "placeholderWithImage": "添加文字（可选），Ctrl+Enter 发送",

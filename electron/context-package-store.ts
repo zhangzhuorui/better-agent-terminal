@@ -115,6 +115,56 @@ export async function deleteContextPackage(id: string): Promise<boolean> {
   return true
 }
 
+export interface ContextPackageSearchResult {
+  id: string
+  name: string
+  description?: string
+  snippet: string
+  content: string
+  tags?: string[]
+  workspaceRoot?: string
+  updatedAt: number
+}
+
+export async function searchContextPackages(query: string): Promise<ContextPackageSearchResult[]> {
+  const term = query.trim().toLowerCase()
+  if (!term) return []
+  const f = await readFile()
+  const results: ContextPackageSearchResult[] = []
+  for (const p of f.packages) {
+    const nameMatch = p.name.toLowerCase().includes(term)
+    const descMatch = p.description?.toLowerCase().includes(term)
+    const contentMatch = p.content.toLowerCase().includes(term)
+    const tagMatch = p.tags?.some(t => t.toLowerCase().includes(term))
+    if (nameMatch || descMatch || contentMatch || tagMatch) {
+      const snippet = extractSnippet(p.content, term, 120)
+      results.push({
+        id: p.id,
+        name: p.name,
+        description: p.description,
+        snippet,
+        content: p.content,
+        tags: p.tags,
+        workspaceRoot: p.workspaceRoot,
+        updatedAt: p.updatedAt,
+      })
+    }
+  }
+  return results.sort((a, b) => b.updatedAt - a.updatedAt)
+}
+
+function extractSnippet(text: string, term: string, maxLen: number): string {
+  const lower = text.toLowerCase()
+  const idx = lower.indexOf(term)
+  if (idx === -1) return text.slice(0, maxLen)
+  const start = Math.max(0, idx - maxLen / 2)
+  const end = Math.min(text.length, idx + term.length + maxLen / 2)
+  let snippet = text.slice(start, end)
+  if (start > 0) snippet = '...' + snippet
+  if (end < text.length) snippet = snippet + '...'
+  return snippet
+}
+
 /** Format for Claude query prompt (English markers to avoid confusing the model). */
 export function formatContextPackagesForPrompt(packages: ContextPackage[], userPrompt: string): string {
   if (!packages.length) return userPrompt
