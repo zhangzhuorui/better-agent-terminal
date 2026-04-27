@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import i18next from 'i18next'
 import QRCode from 'qrcode'
-import type { AppSettings, ShellType, FontType, ColorPresetId, StatuslineItemConfig, LanguageCode } from '../types'
+import type { AppSettings, ShellType, FontType, ColorPresetId, StatuslineItemConfig, LanguageCode, UiThemePreference } from '../types'
 import { FONT_OPTIONS, COLOR_PRESETS, SHELL_OPTIONS, STATUSLINE_ITEMS } from '../types'
 import { settingsStore, parseStatuslineTemplate, exportStatuslineTemplate } from '../stores/settings-store'
 import { EnvVarEditor } from './EnvVarEditor'
@@ -99,10 +99,6 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
     settingsStore.setCustomShellPath(path)
   }
 
-  const handleUiThemeChange = (theme: 'dark' | 'light') => {
-    settingsStore.setTheme(theme)
-  }
-
   const handleFontSizeChange = (size: number) => {
     settingsStore.setFontSize(size)
   }
@@ -113,6 +109,10 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
 
   const handleCustomFontFamilyChange = (customFontFamily: string) => {
     settingsStore.setCustomFontFamily(customFontFamily)
+  }
+
+  const handleUiThemeChange = (theme: UiThemePreference) => {
+    settingsStore.setTheme(theme)
   }
 
   const handleColorPresetChange = (colorPreset: ColorPresetId) => {
@@ -368,15 +368,16 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
           <div className="settings-section">
             <h3>{t('settings.appearance')}</h3>
             <div className="settings-group">
-              <label>{t('settings.interfaceTheme')}</label>
+              <label>{t('settings.uiTheme')}</label>
               <select
-                value={settings.theme === 'light' ? 'light' : 'dark'}
-                onChange={e => handleUiThemeChange(e.target.value as 'dark' | 'light')}
+                value={settings.theme}
+                onChange={e => handleUiThemeChange(e.target.value as UiThemePreference)}
               >
-                <option value="dark">{t('settings.interfaceThemeDark')}</option>
-                <option value="light">{t('settings.interfaceThemeLight')}</option>
+                <option value="dark">{t('settings.uiThemeDark')}</option>
+                <option value="light">{t('settings.uiThemeLight')}</option>
+                <option value="system">{t('settings.uiThemeSystem')}</option>
               </select>
-              <p className="settings-hint">{t('settings.interfaceThemeHint')}</p>
+              <p className="settings-hint">{t('settings.uiThemeHint')}</p>
             </div>
             <div className="settings-group">
               <label>{t('settings.fontSize', { size: settings.fontSize })}</label>
@@ -416,7 +417,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
             )}
 
             <div className="settings-group">
-              <label>{t('settings.terminalColorPreset')}</label>
+              <label>{t('settings.colorTheme')}</label>
               <select
                 value={settings.colorPreset}
                 onChange={e => handleColorPresetChange(e.target.value as ColorPresetId)}
@@ -427,7 +428,6 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                   </option>
                 ))}
               </select>
-              <p className="settings-hint">{t('settings.terminalColorPresetHint')}</p>
             </div>
 
             {settings.colorPreset === 'custom' && (

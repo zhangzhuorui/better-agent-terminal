@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
+import { subscribeUiEffectiveTheme } from '../utils/apply-ui-theme'
 import { HighlightedCode } from './PathLinker'
 import hljs from 'highlight.js/lib/core'
 
@@ -174,24 +175,34 @@ function renderMarkdown(text: string): string {
 }
 
 // Mermaid rendering: dynamically import mermaid only when needed
-let mermaidInstance: typeof import('mermaid')['default'] | null = null
+let mermaidInitEffective: 'dark' | 'light' | null = null
 
 async function getMermaid() {
-  if (!mermaidInstance) {
-    mermaidInstance = (await import('mermaid')).default
-    mermaidInstance.initialize({
+  const effective = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark'
+  const mermaid = (await import('mermaid')).default
+  if (mermaidInitEffective !== effective) {
+    mermaidInitEffective = effective
+    mermaid.initialize({
       startOnLoad: false,
-      theme: 'dark',
-      themeVariables: {
-        darkMode: true,
-        background: '#1e1e1e',
-        primaryColor: '#3498db',
-        primaryTextColor: '#e0e0e0',
-        lineColor: '#666',
-      },
+      theme: effective === 'light' ? 'neutral' : 'dark',
+      themeVariables:
+        effective === 'light'
+          ? {
+              background: '#ffffff',
+              primaryColor: '#0063b1',
+              primaryTextColor: '#333333',
+              lineColor: '#888888',
+            }
+          : {
+              darkMode: true,
+              background: '#1e1e1e',
+              primaryColor: '#3498db',
+              primaryTextColor: '#e0e0e0',
+              lineColor: '#666',
+            },
     })
   }
-  return mermaidInstance
+  return mermaid
 }
 
 async function renderMermaidBlocks(container: HTMLElement) {
@@ -215,16 +226,20 @@ async function renderMermaidBlocks(container: HTMLElement) {
 
 function MarkdownPreview({ content }: { content: string }) {
   const containerRef = useRef<HTMLDivElement>(null)
+  const [themeTick, setThemeTick] = useState(0)
   const html = renderMarkdown(content)
+
+  useEffect(() => subscribeUiEffectiveTheme(() => setThemeTick(t => t + 1)), [])
 
   useEffect(() => {
     if (containerRef.current) {
       renderMermaidBlocks(containerRef.current)
     }
-  }, [html])
+  }, [html, themeTick])
 
   return (
     <div
+      key={themeTick}
       ref={containerRef}
       className="file-preview-markdown"
       dangerouslySetInnerHTML={{ __html: html }}

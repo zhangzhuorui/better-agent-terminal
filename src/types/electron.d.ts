@@ -31,6 +31,9 @@ interface ElectronAPI {
   app: {
     openNewInstance: (profileId: string) => Promise<void>
     getLaunchProfile: () => Promise<string | null>
+    setDockBadge?: (count: number) => Promise<void>
+    /** BrowserWindow background (#RRGGBB); aligns with interface light/dark theme. */
+    setChromeBackgroundColor?: (hex: string) => Promise<void>
   }
   tunnel: {
     getConnection: () => Promise<{ url: string; token: string; mode: string; addresses: { ip: string; mode: string; label: string }[] } | { error: string }>

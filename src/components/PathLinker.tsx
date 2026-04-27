@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
 import { useTranslation } from 'react-i18next'
 import hljs from 'highlight.js/lib/core'
-import 'highlight.js/styles/vs2015.css'
+// hljs stylesheet: `applyUiTheme` → `syncHljsStylesheet` (vs2015 / github)
 // Register only the languages we actually use (saves ~800KB vs full highlight.js)
 import typescript from 'highlight.js/lib/languages/typescript'
 import javascript from 'highlight.js/lib/languages/javascript'

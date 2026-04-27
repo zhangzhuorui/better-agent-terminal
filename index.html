@@ -7,6 +7,25 @@
     <title>Better Agent Terminal</title>
     <script>
       (function () {
+        try {
+          function __eff(pref) {
+            if (pref === 'light') return 'light'
+            if (pref === 'dark' || pref == null || pref === '') return 'dark'
+            if (pref === 'system' && window.matchMedia) {
+              return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
+            }
+            return 'dark'
+          }
+          var th = localStorage.getItem('better-agent-ui-theme')
+          if (__eff(th) === 'light') {
+            document.documentElement.setAttribute('data-theme', 'light')
+            document.documentElement.style.colorScheme = 'light'
+          }
+        } catch (e) {}
+      })()
+    </script>
+    <script>
+      (function () {
         var l = (navigator.language || '').toLowerCase()
         var splash = 'Loading...'
         if (l === 'zh-tw' || l === 'zh-hk' || l === 'zh-mo') {
@@ -27,15 +46,19 @@
     <style>
       /* Inline critical CSS for instant skeleton render */
       body { margin: 0; background: #1a1a1a; overflow: hidden; }
+      html[data-theme="light"] body { background: #f0f0f0; }
       #splash {
         position: fixed; inset: 0; z-index: 9999;
         display: flex; height: 100vh; color: #888; font-family: system-ui;
       }
+      html[data-theme="light"] #splash { color: #666; }
       #splash-sidebar {
         width: 220px; background: #111; border-right: 1px solid #333;
         padding: 16px; box-sizing: border-box;
       }
+      html[data-theme="light"] #splash-sidebar { background: #e8e8e8; border-right-color: #ccc; }
       #splash-sidebar h2 { color: #ccc; font-size: 14px; margin: 0 0 16px; }
+      html[data-theme="light"] #splash-sidebar h2 { color: #333; }
       #splash-main { flex: 1; display: flex; align-items: center; justify-content: center; }
       #splash-main span { font-size: 13px; opacity: 0.5; }
     </style>

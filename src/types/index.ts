@@ -192,6 +192,9 @@ export const AGENT_COMMAND_OPTIONS: { id: AgentCommandType; name: string; comman
 
 export type LanguageCode = 'en' | 'zh-TW' | 'zh-CN';
 
+/** App chrome (sidebar, panels, Claude UI). Terminal colors use `colorPreset` separately. */
+export type UiThemePreference = 'dark' | 'light' | 'system'
+
 export interface AppSettings {
   language: LanguageCode;
   shell: ShellType;
@@ -199,7 +202,7 @@ export interface AppSettings {
   fontSize: number;
   fontFamily: FontType;
   customFontFamily: string;
-  theme: 'dark' | 'light';
+  theme: UiThemePreference;
   colorPreset: ColorPresetId;
   customBackgroundColor: string;
   customForegroundColor: string;

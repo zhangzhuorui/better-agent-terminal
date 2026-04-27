@@ -1,8 +1,8 @@
-import type { AppSettings, ShellType, FontType, ColorPresetId, EnvVariable, AgentCommandType, StatuslineItemConfig, StatuslineItemId, LanguageCode } from '../types'
+import type { AppSettings, ShellType, FontType, ColorPresetId, EnvVariable, AgentCommandType, StatuslineItemConfig, StatuslineItemId, LanguageCode, UiThemePreference } from '../types'
 import type { AgentPresetId } from '../types/agent-presets'
 import { FONT_OPTIONS, COLOR_PRESETS, AGENT_COMMAND_OPTIONS, STATUSLINE_ITEMS } from '../types'
 import { detectBrowserLanguage } from '../i18n'
-import { applyAppTheme } from '../utils/apply-app-theme'
+import { applyUiTheme } from '../utils/apply-ui-theme'
 
 type Listener = () => void
 
@@ -76,9 +76,9 @@ class SettingsStore {
     this.save()
   }
 
-  setTheme(theme: 'dark' | 'light'): void {
+  setTheme(theme: UiThemePreference): void {
     this.settings = { ...this.settings, theme }
-    applyAppTheme(theme)
+    applyUiTheme(theme)
     this.notify()
     this.save()
   }
@@ -289,19 +289,20 @@ class SettingsStore {
         if (parsed.language !== undefined && !allowed.includes(parsed.language)) {
           parsed.language = defaultLanguage()
         }
+        if (
+          parsed.theme !== undefined &&
+          parsed.theme !== 'dark' &&
+          parsed.theme !== 'light' &&
+          parsed.theme !== 'system'
+        ) {
+          parsed.theme = 'dark'
+        }
         this.settings = { ...defaultSettings, ...parsed }
-        const th = this.settings.theme === 'light' ? 'light' : 'dark'
-        this.settings = { ...this.settings, theme: th }
-        applyAppTheme(th)
+        applyUiTheme(this.settings.theme)
         this.notify()
       } catch (e) {
         console.error('Failed to parse settings:', e)
-        this.settings = { ...defaultSettings }
-        applyAppTheme('dark')
-        this.notify()
       }
-    } else {
-      applyAppTheme(this.settings.theme === 'light' ? 'light' : 'dark')
     }
   }
 }

@@ -59,6 +59,7 @@ const electronAPI = {
     openNewInstance: (profileId: string) => ipcRenderer.invoke('app:open-new-instance', profileId),
     getLaunchProfile: () => ipcRenderer.invoke('app:get-launch-profile') as Promise<string | null>,
     setDockBadge: (count: number) => ipcRenderer.invoke('app:set-dock-badge', count),
+    setChromeBackgroundColor: (hex: string) => ipcRenderer.invoke('app:set-chrome-background', hex),
   },
   update: {
     check: () => ipcRenderer.invoke('update:check'),

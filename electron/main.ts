@@ -1115,6 +1115,14 @@ function registerLocalHandlers() {
     }
   })
 
+  /** Match renderer `data-theme` / `--bg-primary` to reduce window-edge flash (Electron BrowserWindow background). */
+  ipcMain.handle('app:set-chrome-background', (_event, hex: string) => {
+    const color = typeof hex === 'string' && /^#[0-9a-fA-F]{6}$/.test(hex) ? hex : '#1a1a1a'
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.setBackgroundColor(color)
+    }
+  })
+
   // Open new instance with a specific profile
   ipcMain.handle('app:open-new-instance', async (_event, profileId: string) => {
     const { spawn } = await import('child_process')
@@ -1131,6 +1139,7 @@ function registerLocalHandlers() {
     }
     const detachedWin = new BrowserWindow({
       width: 900, height: 700, minWidth: 600, minHeight: 400,
+      backgroundColor: '#1a1a1a',
       webPreferences: { preload: path.join(__dirname, 'preload.js'), nodeIntegration: false, contextIsolation: true },
       frame: true, titleBarStyle: 'default', icon: nativeImage.createFromPath(path.join(__dirname, process.platform === 'win32' ? '../assets/icon.ico' : '../assets/icon.png'))
     })
