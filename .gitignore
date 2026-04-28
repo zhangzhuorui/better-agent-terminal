@@ -14,3 +14,9 @@ nul
 
 # Diagnosis reports
 tests/*.json
+/.idea/vcs.xml
+/.idea/modules.xml
+/.idea/misc.xml
+/.idea/encodings.xml
+/.idea/compiler.xml
+/.idea/better-agent-terminal.iml
