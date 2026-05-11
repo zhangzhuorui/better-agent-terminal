@@ -84,12 +84,27 @@ export async function createContextPackage(input: {
 
 export async function updateContextPackage(
   id: string,
-  updates: Partial<Pick<ContextPackage, 'name' | 'description' | 'content' | 'tags' | 'workspaceRoot'>>
+  updates: Partial<Pick<ContextPackage, 'name' | 'description' | 'content' | 'tags' | 'workspaceRoot'>>,
+  saveVersion = true
 ): Promise<ContextPackage | null> {
   const f = await readFile()
   const idx = f.packages.findIndex(p => p.id === id)
   if (idx === -1) return null
   const cur = f.packages[idx]
+
+  // Save version history before update
+  let versions = cur.versions ? [...cur.versions] : []
+  if (saveVersion && 'content' in updates && updates.content !== undefined && updates.content !== cur.content) {
+    const nextVersionNum = versions.length > 0 ? versions[versions.length - 1].version + 1 : 1
+    versions.push({
+      version: nextVersionNum,
+      content: cur.content,
+      updatedAt: cur.updatedAt,
+    })
+    // Keep at most 20 versions
+    if (versions.length > 20) versions = versions.slice(versions.length - 20)
+  }
+
   const next: ContextPackage = {
     ...cur,
     ...('name' in updates && updates.name !== undefined ? { name: updates.name.trim() || cur.name } : {}),
@@ -100,9 +115,40 @@ export async function updateContextPackage(
       ? { workspaceRoot: updates.workspaceRoot?.trim() ? updates.workspaceRoot.trim() : undefined }
       : {}),
     updatedAt: Date.now(),
+    versions,
   }
   f.packages[idx] = next
   await writeFile(f)
+  logger.log(`[context-packages] updated ${id} "${next.name}" (versions: ${versions.length})`)
+  return next
+}
+
+export async function rollbackContextPackage(id: string, version: number): Promise<ContextPackage | null> {
+  const f = await readFile()
+  const idx = f.packages.findIndex(p => p.id === id)
+  if (idx === -1) return null
+  const cur = f.packages[idx]
+  const target = cur.versions?.find(v => v.version === version)
+  if (!target) return null
+
+  const versions = cur.versions ? [...cur.versions] : []
+  const nextVersionNum = versions.length > 0 ? versions[versions.length - 1].version + 1 : 1
+  versions.push({
+    version: nextVersionNum,
+    content: cur.content,
+    updatedAt: cur.updatedAt,
+  })
+  if (versions.length > 20) versions.slice(versions.length - 20)
+
+  const next: ContextPackage = {
+    ...cur,
+    content: target.content,
+    updatedAt: Date.now(),
+    versions,
+  }
+  f.packages[idx] = next
+  await writeFile(f)
+  logger.log(`[context-packages] rolled back ${id} to version ${version}`)
   return next
 }
 

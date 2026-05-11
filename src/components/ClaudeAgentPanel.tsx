@@ -612,10 +612,10 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
     const unsubs = [
       api.onMessage((sid: string, msg: unknown) => {
         if (sid !== sessionId) {
-          console.log(`${tag} SKIP onMessage sid=${sid.slice(0, 8)} (mine=${sessionId.slice(0, 8)})`)
+          window.electronAPI?.debug?.log(`${tag} SKIP onMessage sid=${sid.slice(0, 8)} (mine=${sessionId.slice(0, 8)})`)
           return
         }
-        console.log(`${tag} onMessage`, (msg as ClaudeMessage).id)
+        window.electronAPI?.debug?.log(`${tag} onMessage`, (msg as ClaudeMessage).id)
         workspaceStore.updateTerminalActivity(sessionId)
         const message = msg as ClaudeMessage
         // On restart, sys-init message arrives again — reset messages
@@ -912,7 +912,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
 
       api.onHistory((sid: string, items: unknown[]) => {
         if (sid !== sessionId) {
-          console.log(`${tag} SKIP onHistory sid=${sid.slice(0, 8)} items=${(items as unknown[]).length} (mine=${sessionId.slice(0, 8)})`)
+          window.electronAPI?.debug?.log(`${tag} SKIP onHistory sid=${sid.slice(0, 8)} items=${(items as unknown[]).length} (mine=${sessionId.slice(0, 8)})`)
           return
         }
         const dlog2 = (...args: unknown[]) => window.electronAPI?.debug?.log(...args)
@@ -991,7 +991,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
     ]
 
     return () => {
-      console.log(`${tag} unsubscribing IPC events`)
+      window.electronAPI?.debug?.log(`${tag} unsubscribing IPC events`)
       unsubs.forEach(unsub => unsub())
     }
   }, [sessionId])
@@ -1044,7 +1044,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
   useEffect(() => {
     if (sessionMeta?.sdkSessionId && availableModels.length === 0) {
       window.electronAPI.claude.getSupportedModels(sessionId).then((models: ModelInfo[]) => {
-        console.log('[getSupportedModels] raw response:', JSON.stringify(models, null, 2))
+        window.electronAPI?.debug?.log('[getSupportedModels] raw response:', JSON.stringify(models, null, 2))
         if (models && models.length > 0) {
           setAvailableModels(models)
         }
@@ -1114,7 +1114,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
   }, [sessionId])
 
   const handleResumeSelect = useCallback(async (sdkSessionId: string) => {
-    console.log(`[Claude:${sessionId.slice(0, 8)}] handleResumeSelect sdkSessionId=${sdkSessionId.slice(0, 8)}`)
+    window.electronAPI?.debug?.log(`[Claude:${sessionId.slice(0, 8)}] handleResumeSelect sdkSessionId=${sdkSessionId.slice(0, 8)}`)
     setShowResumeList(false)
     setResumeSessions([])
     // Clear UI immediately so user sees the switch

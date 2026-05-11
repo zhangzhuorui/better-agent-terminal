@@ -41,7 +41,8 @@
     "ws": "^8.19.0"
   },
   "optionalDependencies": {
-    "@lydell/node-pty": "^1.1.0"
+    "@lydell/node-pty": "^1.1.0",
+    "codeburn": "^0.9.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
@@ -127,7 +128,8 @@
     ],
     "asarUnpack": [
       "node_modules/@anthropic-ai/claude-code/**/*",
-      "node_modules/@anthropic-ai/claude-agent-sdk/**/*"
+      "node_modules/@anthropic-ai/claude-agent-sdk/**/*",
+      "node_modules/codeburn/**/*"
     ]
   }
 }

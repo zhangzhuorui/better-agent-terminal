@@ -179,7 +179,7 @@ export function HighlightedCode({ code, ext, className }: { code: string; ext: s
       <table className="hlcode-table">
         <tbody>
           {highlightedLines.map((lineHtml, i) => (
-            <tr key={i}>
+            <tr key={i} id={`line-${i + 1}`}>
               <td className="hlcode-ln">{i + 1}</td>
               <td className="hlcode-line" dangerouslySetInnerHTML={{ __html: lineHtml || ' ' }} />
             </tr>

@@ -20,6 +20,8 @@ interface SidebarProps {
   onRemoveWorkspace: (id: string) => void
   onRenameWorkspace: (id: string, alias: string) => void
   onReorderWorkspaces: (workspaceIds: string[]) => void
+  onArchiveWorkspace: (id: string) => void
+  onUnarchiveWorkspace: (id: string) => void
   onOpenEnvVars: (workspaceId: string) => void
   onDetachWorkspace: (workspaceId: string) => void
   onOpenProfiles: () => void
@@ -42,6 +44,8 @@ export function Sidebar({
   onRemoveWorkspace,
   onRenameWorkspace,
   onReorderWorkspaces,
+  onArchiveWorkspace,
+  onUnarchiveWorkspace,
   onOpenEnvVars,
   onDetachWorkspace,
   onOpenProfiles,
@@ -58,14 +62,21 @@ export function Sidebar({
   const [githubUrl, setGithubUrl] = useState<string | null>(null)
   const [groupEditTarget, setGroupEditTarget] = useState<string | null>(null)
   const [groupEditValue, setGroupEditValue] = useState('')
+  const [archivedExpanded, setArchivedExpanded] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const groupInputRef = useRef<HTMLInputElement>(null)
   const contextMenuRef = useRef<HTMLDivElement>(null)
 
-  // Filter workspaces by active group
-  const filteredWorkspaces = activeGroup
-    ? workspaces.filter(w => w.group === activeGroup)
-    : workspaces
+  // Separate active and archived workspaces
+  const activeWorkspaces = (activeGroup
+    ? workspaces.filter(w => w.group === activeGroup && !w.archived)
+    : workspaces.filter(w => !w.archived)
+  ).sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.createdAt - b.createdAt)
+
+  const archivedWorkspaces = (activeGroup
+    ? workspaces.filter(w => w.group === activeGroup && w.archived)
+    : workspaces.filter(w => w.archived)
+  ).sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.createdAt - b.createdAt)
 
   useEffect(() => {
     if (editingId && inputRef.current) {
@@ -222,7 +233,7 @@ export function Sidebar({
       return
     }
 
-    const currentOrder = workspaces.map(w => w.id)
+    const currentOrder = activeWorkspaces.map(w => w.id)
     const draggedIndex = currentOrder.indexOf(draggedId)
     const targetIndex = currentOrder.indexOf(targetId)
 
@@ -288,7 +299,7 @@ export function Sidebar({
         </div>
       )}
       <div className="workspace-list">
-        {filteredWorkspaces.map(workspace => (
+        {activeWorkspaces.map(workspace => (
           <div
             key={workspace.id}
             className={`workspace-item ${workspace.id === activeWorkspaceId ? 'active' : ''} ${dragOverId === workspace.id ? `drag-over-${dragPosition}` : ''}`}
@@ -355,6 +366,16 @@ export function Sidebar({
                 )}
               </div>
               <div className="workspace-item-actions">
+                <button
+                  className="archive-btn"
+                  title={t('sidebar.archiveWorkspace')}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onArchiveWorkspace(workspace.id)
+                  }}
+                >
+                  &#128230;
+                </button>
                 <ActivityIndicator
                   workspaceId={workspace.id}
                   size="small"
@@ -363,6 +384,51 @@ export function Sidebar({
             </div>
           </div>
         )
+        )}
+        {archivedWorkspaces.length > 0 && (
+          <>
+            <div
+              className={`archived-section-header ${archivedExpanded ? 'expanded' : ''}`}
+              onClick={() => setArchivedExpanded(v => !v)}
+            >
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+              {t('sidebar.archived')} ({archivedWorkspaces.length})
+            </div>
+            {archivedExpanded && archivedWorkspaces.map(workspace => (
+              <div
+                key={workspace.id}
+                className={`workspace-item archived ${workspace.id === activeWorkspaceId ? 'active' : ''}`}
+                onClick={() => onSelectWorkspace(workspace.id)}
+                onContextMenu={(e) => handleContextMenu(e, workspace.id)}
+              >
+                {workspace.color && (
+                  <div className="workspace-color-bar" style={{ backgroundColor: workspace.color }} />
+                )}
+                <div className="workspace-item-content">
+                  <div className="workspace-item-info">
+                    <span className="workspace-alias">{workspace.alias || workspace.name}</span>
+                    <span className="workspace-folder">
+                      {workspace.group ? `[${workspace.group}] ` : ''}{workspace.name}
+                    </span>
+                  </div>
+                  <div className="workspace-item-actions">
+                    <button
+                      className="unarchive-btn"
+                      title={t('sidebar.unarchiveWorkspace')}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onUnarchiveWorkspace(workspace.id)
+                      }}
+                    >
+                      &#8617;
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </>
         )}
       </div>
       <div className="sidebar-footer">

@@ -108,6 +108,9 @@ interface ElectronAPI {
     getDiffFiles: (cwd: string, commitHash?: string) => Promise<Array<{ status: string; file: string }>>
     getStatus: (cwd: string) => Promise<Array<{ status: string; file: string }>>
     getRoot: (cwd: string) => Promise<string | null>
+    getStash: (cwd: string) => Promise<Array<{ index: number; hash: string; message: string; date: string }>>
+    getBlame: (cwd: string, filePath: string) => Promise<Array<{ lineNumber: number; commitHash: string; author: string; date: string; content: string }>>
+    getBranchGraph: (cwd: string) => Promise<Array<{ name: string; current: boolean; ahead: number; behind: number; remote?: string }>>
   }
   fs: {
     readdir: (dirPath: string) => Promise<Array<{ name: string; path: string; isDirectory: boolean }>>
@@ -177,6 +180,45 @@ interface ElectronAPI {
   contentSearch: {
     searchMessages: (sessionId: string, query: string) => Promise<unknown[]>
     searchContextPackages: (query: string) => Promise<unknown[]>
+  }
+  injectionRule: {
+    list: () => Promise<unknown[]>
+    create: (input: unknown) => Promise<unknown>
+    update: (id: string, updates: unknown) => Promise<unknown | null>
+    delete: (id: string) => Promise<boolean>
+    evaluate: (ctx: unknown) => Promise<unknown>
+  }
+  trace: {
+    query: (q: unknown) => Promise<unknown[]>
+    stats: (sessionId: string) => Promise<unknown>
+    trim: () => Promise<void>
+  }
+  audit: {
+    report: (days?: number) => Promise<unknown>
+    trim: () => Promise<void>
+  }
+  search: {
+    content: (options: unknown) => Promise<unknown[]>
+    files: (query: string, workspacePath?: string) => Promise<string[]>
+  }
+  mcp: {
+    list: () => Promise<unknown[]>
+    get: (id: string) => Promise<unknown | null>
+    create: (input: { name: string; enabled: boolean; transport: 'stdio' | 'sse' | 'websocket'; command?: string; args?: string[]; env?: Record<string, string>; url?: string; timeoutMs?: number }) => Promise<unknown>
+    update: (id: string, updates: Partial<{ name: string; enabled: boolean; transport: 'stdio' | 'sse' | 'websocket'; command?: string; args?: string[]; env?: Record<string, string>; url?: string; timeoutMs?: number }>) => Promise<unknown | null>
+    delete: (id: string) => Promise<boolean>
+    healthCheck: (id: string) => Promise<{ ok: boolean; error?: string }>
+  }
+  workflow: {
+    list: () => Promise<unknown[]>
+    get: (id: string) => Promise<unknown | null>
+    create: (input: { name: string; description?: string; enabled: boolean; trigger: unknown; nodes: unknown[]; edges: unknown[] }) => Promise<unknown>
+    update: (id: string, updates: Partial<{ name: string; description?: string; enabled: boolean; trigger: unknown; nodes: unknown[]; edges: unknown[] }>) => Promise<unknown | null>
+    delete: (id: string) => Promise<boolean>
+    execute: (workflowId: string) => Promise<{ ok: boolean; error?: string; executionId?: string }>
+    executions: (workflowId?: string, limit?: number) => Promise<unknown[]>
+    getExecution: (id: string) => Promise<unknown | null>
+    cancelExecution: (id: string) => Promise<boolean>
   }
 }
 

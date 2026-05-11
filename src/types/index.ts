@@ -18,6 +18,8 @@ export interface Workspace {
   group?: string;                // Workspace 分組
   color?: string;                // Workspace 顏色標籤
   lastSdkSessionId?: string;     // 上次使用的 SDK session ID，下次自動 resume
+  archived?: boolean;            // 是否已歸檔（隱藏但不終止進程）
+  order?: number;                // 排序順序（越小越靠前）
 }
 
 export const WORKSPACE_COLORS = [

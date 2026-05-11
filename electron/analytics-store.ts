@@ -116,7 +116,7 @@ export async function recordUserMessage(source: 'user' | 'automation'): Promise<
 
 export async function recordAgentTurn(
   sessionId: string,
-  meta: { inputTokens: number; outputTokens: number; totalCost: number }
+  meta: { inputTokens: number; outputTokens: number; totalCost: number; model?: string }
 ): Promise<void> {
   const data = await readFile()
   const day = localDayKey()
@@ -138,10 +138,23 @@ export async function recordAgentTurn(
   data.totals.outputTokens += dOut
   data.totals.costUsd += dCost
 
-  data.byDay[day].agentTurns += 1
-  data.byDay[day].inputTokens += dIn
-  data.byDay[day].outputTokens += dOut
-  data.byDay[day].costUsd += dCost
+  const dayEntry = data.byDay[day]
+  dayEntry.agentTurns += 1
+  dayEntry.inputTokens += dIn
+  dayEntry.outputTokens += dOut
+  dayEntry.costUsd += dCost
+
+  // Per-model breakdown
+  if (meta.model) {
+    if (!dayEntry.byModel) dayEntry.byModel = {}
+    if (!dayEntry.byModel[meta.model]) {
+      dayEntry.byModel[meta.model] = { inputTokens: 0, outputTokens: 0, costUsd: 0, agentTurns: 0 }
+    }
+    dayEntry.byModel[meta.model].inputTokens += dIn
+    dayEntry.byModel[meta.model].outputTokens += dOut
+    dayEntry.byModel[meta.model].costUsd += dCost
+    dayEntry.byModel[meta.model].agentTurns += 1
+  }
 
   await writeFile(data)
 }
@@ -166,7 +179,7 @@ export async function recordAutomationRun(success: boolean): Promise<void> {
   await writeFile(data)
 }
 
-export async function trimOldDays(keepDays = 120): Promise<void> {
+export async function trimOldDays(keepDays = 365): Promise<void> {
   const data = await readFile()
   const keys = Object.keys(data.byDay).sort()
   if (keys.length <= keepDays) return
@@ -174,4 +187,15 @@ export async function trimOldDays(keepDays = 120): Promise<void> {
   for (const k of drop) delete data.byDay[k]
   await writeFile(data)
   logger.log(`[analytics] trimmed ${drop.length} old day buckets`)
+}
+
+export async function setBudgetLimitUsd(limit: number): Promise<void> {
+  const data = await readFile()
+  ;(data as any).budgetLimitUsd = limit
+  await writeFile(data)
+}
+
+export async function getBudgetLimitUsd(): Promise<number> {
+  const data = await readFile()
+  return (data as any).budgetLimitUsd ?? 0
 }

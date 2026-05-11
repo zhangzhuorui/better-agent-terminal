@@ -439,6 +439,8 @@ export default function App() {
         onReorderWorkspaces={(workspaceIds) => {
           workspaceStore.reorderWorkspaces(workspaceIds)
         }}
+        onArchiveWorkspace={(id) => workspaceStore.archiveWorkspace(id)}
+        onUnarchiveWorkspace={(id) => workspaceStore.unarchiveWorkspace(id)}
         onOpenEnvVars={(workspaceId) => setEnvDialogWorkspaceId(workspaceId)}
         onDetachWorkspace={handleDetachWorkspace}
         activeProfileName={activeProfileName}

@@ -120,8 +120,57 @@ function getFileIcon(name: string): string {
     case 'py': return '🐍'
     case 'go': return '🔵'
     case 'rs': return '🦀'
+    case 'java': return '☕'
+    case 'cpp': case 'c': case 'h': case 'hpp': return '⚡'
+    case 'cs': return '#️⃣'
+    case 'rb': return '💎'
+    case 'php': return '🐘'
+    case 'swift': return '🕊️'
+    case 'kt': return '🟣'
+    case 'sql': return '🗃️'
+    case 'csv': return '📊'
+    case 'pdf': return '📕'
+    case 'zip': case 'tar': case 'gz': case 'rar': case '7z': return '📦'
+    case 'dockerfile': return '🐳'
+    case 'vue': return '🟢'
+    case 'svelte': return '🔥'
+    case 'gitignore': return '🙈'
     default: return '📄'
   }
+}
+
+interface SymbolInfo {
+  type: 'function' | 'class' | 'interface' | 'variable' | 'unknown'
+  name: string
+  line: number
+}
+
+function extractSymbols(content: string): SymbolInfo[] {
+  const patterns: { regex: RegExp; type: SymbolInfo['type'] }[] = [
+    { regex: /^(?:export\s+)?(?:async\s+)?function\s+(\w+)/, type: 'function' },
+    { regex: /^(?:export\s+)?class\s+(\w+)/, type: 'class' },
+    { regex: /^(?:export\s+)?interface\s+(\w+)/, type: 'interface' },
+    { regex: /^(?:export\s+)?(?:const|let|var)\s+(\w+)\s*[=:]/, type: 'variable' },
+    { regex: /^(?:export\s+)?(?:def|fn)\s+(\w+)/, type: 'function' },
+    { regex: /^\s*(\w+)\s*[=:].*=>\s*\{/, type: 'function' },
+    { regex: /^\s*(?:public|private|protected|static)?\s*(?:async\s+)?(?:\w+\s+)?(\w+)\s*\([^)]*\)\s*\{/, type: 'function' },
+  ]
+  const symbols: SymbolInfo[] = []
+  const seen = new Set<string>()
+  content.split('\n').forEach((line, idx) => {
+    for (const p of patterns) {
+      const m = line.match(p.regex)
+      if (m) {
+        const key = `${p.type}:${m[1]}:${idx}`
+        if (!seen.has(key)) {
+          seen.add(key)
+          symbols.push({ type: p.type, name: m[1], line: idx + 1 })
+        }
+        break
+      }
+    }
+  })
+  return symbols
 }
 
 // Markdown rendering using marked + DOMPurify + highlight.js
@@ -255,6 +304,34 @@ function MarkdownPreview({ content }: { content: string }) {
   )
 }
 
+function SymbolOutline({ symbols, onSelect }: { symbols: SymbolInfo[]; onSelect: (line: number) => void }) {
+  const typeIcon: Record<string, string> = {
+    function: '🔧',
+    class: '🔷',
+    interface: '🔹',
+    variable: '📌',
+    unknown: '•',
+  }
+  return (
+    <div className="file-symbol-outline">
+      <div className="file-symbol-outline-header">Outline</div>
+      <div className="file-symbol-outline-list">
+        {symbols.map(s => (
+          <div
+            key={`${s.type}:${s.name}:${s.line}`}
+            className="file-symbol-outline-item"
+            onClick={() => onSelect(s.line)}
+            title={`${s.type} ${s.name} (line ${s.line})`}
+          >
+            <span className="file-symbol-outline-icon">{typeIcon[s.type] || '•'}</span>
+            <span className="file-symbol-outline-name">{s.name}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function FilePreview({ filePath, fileName, refreshKey }: { filePath: string; fileName: string; refreshKey: number }) {
   const { t } = useTranslation()
   const [content, setContent] = useState<string | null>(null)
@@ -262,6 +339,7 @@ function FilePreview({ filePath, fileName, refreshKey }: { filePath: string; fil
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [viewMode, setViewMode] = useState<'source' | 'rendered'>('rendered')
+  const [showOutline, setShowOutline] = useState(true)
   const isMarkdown = getFileExt(fileName) === 'md'
 
   useEffect(() => {
@@ -316,18 +394,46 @@ function FilePreview({ filePath, fileName, refreshKey }: { filePath: string; fil
     )
   }
 
+  const handleScrollToLine = (line: number) => {
+    const el = document.getElementById(`line-${line}`)
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      el.style.background = 'rgba(217, 119, 6, 0.15)'
+      setTimeout(() => { el.style.background = '' }, 1200)
+    }
+  }
+
+  const symbols = content ? extractSymbols(content) : []
+  const hasSymbols = symbols.length > 0
+
   if (content !== null) {
     return (
       <>
-        {isMarkdown && (
+        {(isMarkdown || hasSymbols) && (
           <div className="file-preview-mode-bar">
-            <button className={`git-diff-mode-btn${viewMode === 'rendered' ? ' active' : ''}`} onClick={() => setViewMode('rendered')}>{t('fileTree.preview')}</button>
-            <button className={`git-diff-mode-btn${viewMode === 'source' ? ' active' : ''}`} onClick={() => setViewMode('source')}>{t('fileTree.source')}</button>
+            {isMarkdown && (
+              <>
+                <button className={`git-diff-mode-btn${viewMode === 'rendered' ? ' active' : ''}`} onClick={() => setViewMode('rendered')}>{t('fileTree.preview')}</button>
+                <button className={`git-diff-mode-btn${viewMode === 'source' ? ' active' : ''}`} onClick={() => setViewMode('source')}>{t('fileTree.source')}</button>
+              </>
+            )}
+            {hasSymbols && (
+              <button className={`git-diff-mode-btn${showOutline ? ' active' : ''}`} onClick={() => setShowOutline(v => !v)}>Outline</button>
+            )}
           </div>
         )}
         {isMarkdown && viewMode === 'rendered'
           ? <MarkdownPreview content={content} />
-          : <HighlightedCode code={content} ext={getFileExt(fileName)} className="file-preview-text" />
+          : (
+            <div style={{ display: 'flex', flexDirection: 'row', height: '100%', overflow: 'hidden' }}>
+              {hasSymbols && showOutline && (
+                <SymbolOutline symbols={symbols} onSelect={handleScrollToLine} />
+              )}
+              <div style={{ flex: 1, overflow: 'auto', minWidth: 0 }}>
+                <HighlightedCode code={content} ext={getFileExt(fileName)} className="file-preview-text" />
+              </div>
+            </div>
+          )
         }
       </>
     )

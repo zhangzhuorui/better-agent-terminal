@@ -14,6 +14,29 @@ interface GitStatusEntry {
   file: string
 }
 
+interface GitBranchInfo {
+  name: string
+  current: boolean
+  ahead: number
+  behind: number
+  remote?: string
+}
+
+interface GitStashEntry {
+  index: number
+  hash: string
+  message: string
+  date: string
+}
+
+interface GitBlameLine {
+  lineNumber: number
+  commitHash: string
+  author: string
+  date: string
+  content: string
+}
+
 interface GitPanelProps {
   workspaceFolderPath: string
 }
@@ -95,12 +118,16 @@ export function GitPanel({ workspaceFolderPath }: Readonly<GitPanelProps>) {
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
   const [diff, setDiff] = useState('')
   const [fileContent, setFileContent] = useState<string | null>(null)
-  const [viewMode, setViewMode] = useState<'diff' | 'file'>('diff')
+  const [viewMode, setViewMode] = useState<'diff' | 'file' | 'blame'>('diff')
   const [loading, setLoading] = useState(true)
   const [filesLoading, setFilesLoading] = useState(false)
   const [diffLoading, setDiffLoading] = useState(false)
   const [isGitRepo, setIsGitRepo] = useState(true)
   const [gitRoot, setGitRoot] = useState<string | null>(null)
+  const [gitViewMode, setGitViewMode] = useState<'commits' | 'branches' | 'stash'>('commits')
+  const [branches, setBranches] = useState<GitBranchInfo[]>([])
+  const [stash, setStash] = useState<GitStashEntry[]>([])
+  const [blame, setBlame] = useState<GitBlameLine[]>([])
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -109,16 +136,20 @@ export function GitPanel({ workspaceFolderPath }: Readonly<GitPanelProps>) {
     setSelectedFile(null)
     setDiff('')
     try {
-      const [logResult, statusResult, branch, root] = await Promise.all([
+      const [logResult, statusResult, branch, root, branchGraph, stashList] = await Promise.all([
         window.electronAPI.git.getLog(workspaceFolderPath),
         window.electronAPI.git.getStatus(workspaceFolderPath),
         window.electronAPI.git.getBranch(workspaceFolderPath),
         window.electronAPI.git.getRoot(workspaceFolderPath),
+        window.electronAPI.git.getBranchGraph(workspaceFolderPath),
+        window.electronAPI.git.getStash(workspaceFolderPath),
       ])
       setIsGitRepo(branch !== null)
       setGitRoot(root)
       setCommits(logResult)
       setStatus(statusResult)
+      setBranches(branchGraph)
+      setStash(stashList)
     } catch {
       setIsGitRepo(false)
     }
@@ -151,6 +182,7 @@ export function GitPanel({ workspaceFolderPath }: Readonly<GitPanelProps>) {
     setSelectedFile(filePath)
     setViewMode('diff')
     setFileContent(null)
+    setBlame([])
     setDiffLoading(true)
     try {
       const d = await window.electronAPI.git.getDiff(workspaceFolderPath, selectedCommit || undefined, filePath)
@@ -191,6 +223,20 @@ export function GitPanel({ workspaceFolderPath }: Readonly<GitPanelProps>) {
     setFileContent(result.content || result.error || 'Unable to read file')
   }, [selectedFile, fileContent, workspaceFolderPath, gitRoot])
 
+  const handleViewBlame = useCallback(async () => {
+    if (!selectedFile) return
+    setViewMode('blame')
+    if (blame.length > 0) return // already loaded
+    setDiffLoading(true)
+    try {
+      const lines = await window.electronAPI.git.getBlame(workspaceFolderPath, selectedFile)
+      setBlame(lines)
+    } catch {
+      setBlame([])
+    }
+    setDiffLoading(false)
+  }, [selectedFile, blame.length, workspaceFolderPath])
+
   if (loading) {
     return <div className="git-panel-empty">{t('common.loading')}</div>
   }
@@ -201,43 +247,89 @@ export function GitPanel({ workspaceFolderPath }: Readonly<GitPanelProps>) {
 
   return (
     <div className="git-panel">
-      {/* Column 1: Commit log */}
+      {/* Column 1: Commit log / Branches / Stash */}
       <div className="git-commit-list">
         <div className="git-col-header">
-          <span>{t('git.commits')}</span>
+          <div className="git-diff-mode-bar" style={{ padding: 0, borderBottom: 'none' }}>
+            <button className={`git-diff-mode-btn ${gitViewMode === 'commits' ? 'active' : ''}`} onClick={() => setGitViewMode('commits')}>
+              {t('git.commits')}
+            </button>
+            <button className={`git-diff-mode-btn ${gitViewMode === 'branches' ? 'active' : ''}`} onClick={() => setGitViewMode('branches')}>
+              {t('git.branches')}
+            </button>
+            <button className={`git-diff-mode-btn ${gitViewMode === 'stash' ? 'active' : ''}`} onClick={() => setGitViewMode('stash')}>
+              {t('git.stash')}
+            </button>
+          </div>
           <button className="git-refresh-btn" onClick={loadData} title={t('git.refresh')}>↻</button>
         </div>
         <div className="git-commit-list-items">
-          {status.length > 0 && (
-            <div
-              className={`git-commit-item ${selectedCommit === 'working' ? 'active' : ''}`}
-              onClick={() => handleSelectCommit('working')}
-            >
-              <div className="git-commit-message">
-                <span className="git-uncommitted-badge">●</span>
-                {t('git.uncommittedChanges')}
-              </div>
-              <div className="git-commit-meta">
-                {t('git.filesChanged', { count: status.length })}
-              </div>
-            </div>
+          {gitViewMode === 'commits' && (
+            <>
+              {status.length > 0 && (
+                <div
+                  className={`git-commit-item ${selectedCommit === 'working' ? 'active' : ''}`}
+                  onClick={() => handleSelectCommit('working')}
+                >
+                  <div className="git-commit-message">
+                    <span className="git-uncommitted-badge">●</span>
+                    {t('git.uncommittedChanges')}
+                  </div>
+                  <div className="git-commit-meta">
+                    {t('git.filesChanged', { count: status.length })}
+                  </div>
+                </div>
+              )}
+              {commits.map(commit => (
+                <div
+                  key={commit.hash}
+                  className={`git-commit-item ${selectedCommit === commit.hash ? 'active' : ''}`}
+                  onClick={() => handleSelectCommit(commit.hash)}
+                >
+                  <div className="git-commit-message">{commit.message}</div>
+                  <div className="git-commit-meta">
+                    <span className="git-commit-hash">{commit.hash.substring(0, 7)}</span>
+                    <span className="git-commit-author">{commit.author}</span>
+                    <span className="git-commit-date">{formatDate(commit.date)}</span>
+                  </div>
+                </div>
+              ))}
+              {commits.length === 0 && status.length === 0 && (
+                <div className="git-panel-empty">{t('git.noCommitsYet')}</div>
+              )}
+            </>
           )}
-          {commits.map(commit => (
-            <div
-              key={commit.hash}
-              className={`git-commit-item ${selectedCommit === commit.hash ? 'active' : ''}`}
-              onClick={() => handleSelectCommit(commit.hash)}
-            >
-              <div className="git-commit-message">{commit.message}</div>
-              <div className="git-commit-meta">
-                <span className="git-commit-hash">{commit.hash.substring(0, 7)}</span>
-                <span className="git-commit-author">{commit.author}</span>
-                <span className="git-commit-date">{formatDate(commit.date)}</span>
-              </div>
-            </div>
-          ))}
-          {commits.length === 0 && status.length === 0 && (
-            <div className="git-panel-empty">{t('git.noCommitsYet')}</div>
+          {gitViewMode === 'branches' && (
+            <>
+              {branches.map(b => (
+                <div key={b.name} className={`git-commit-item ${b.current ? 'active' : ''}`}>
+                  <div className="git-commit-message">
+                    {b.current && <span className="git-uncommitted-badge">★</span>}
+                    {b.name}
+                  </div>
+                  <div className="git-commit-meta">
+                    {b.ahead > 0 && <span>{t('git.branchAhead', { count: b.ahead })}</span>}
+                    {b.behind > 0 && <span>{t('git.branchBehind', { count: b.behind })}</span>}
+                    {b.remote && <span className="git-commit-author">{b.remote}</span>}
+                  </div>
+                </div>
+              ))}
+              {branches.length === 0 && <div className="git-panel-empty">{t('git.noBranches')}</div>}
+            </>
+          )}
+          {gitViewMode === 'stash' && (
+            <>
+              {stash.map(s => (
+                <div key={s.index} className="git-commit-item">
+                  <div className="git-commit-message">{s.message}</div>
+                  <div className="git-commit-meta">
+                    <span className="git-commit-hash">{s.hash.substring(0, 7)}</span>
+                    <span className="git-commit-date">{formatDate(s.date)}</span>
+                  </div>
+                </div>
+              ))}
+              {stash.length === 0 && <div className="git-panel-empty">{t('git.noStash')}</div>}
+            </>
           )}
         </div>
       </div>
@@ -280,7 +372,7 @@ export function GitPanel({ workspaceFolderPath }: Readonly<GitPanelProps>) {
         </div>
       </div>
 
-      {/* Column 3: Diff / File preview */}
+      {/* Column 3: Diff / File preview / Blame */}
       <div className="git-diff-view">
         {selectedFile && isTextFile(selectedFile.split('/').pop() || '') && (
           <div className="git-diff-mode-bar">
@@ -296,12 +388,39 @@ export function GitPanel({ workspaceFolderPath }: Readonly<GitPanelProps>) {
             >
               {t('git.file')}
             </button>
+            <button
+              className={`git-diff-mode-btn ${viewMode === 'blame' ? 'active' : ''}`}
+              onClick={handleViewBlame}
+            >
+              {t('git.blame')}
+            </button>
           </div>
         )}
         {diffLoading ? (
           <div className="git-diff-empty">{t('common.loading')}</div>
         ) : viewMode === 'file' && fileContent !== null ? (
           <pre className="git-file-content">{fileContent}</pre>
+        ) : viewMode === 'blame' ? (
+          <pre className="git-diff-content">
+            {blame.length === 0 ? (
+              <div className="git-diff-empty">No blame data</div>
+            ) : (
+              blame.map((line, i) => (
+                <div key={i} className="git-diff-line" style={{ display: 'flex', gap: 12 }}>
+                  <span style={{ color: 'var(--text-secondary)', minWidth: 120, textOverflow: 'ellipsis', overflow: 'hidden' }} title={line.author}>
+                    {line.author}
+                  </span>
+                  <span style={{ color: 'var(--accent-color)', minWidth: 60, fontFamily: 'monospace' }}>
+                    {line.commitHash.slice(0, 7)}
+                  </span>
+                  <span style={{ color: 'var(--text-secondary)', minWidth: 40, textAlign: 'right' }}>
+                    {line.lineNumber}
+                  </span>
+                  <span style={{ flex: 1 }}>{line.content}</span>
+                </div>
+              ))
+            )}
+          </pre>
         ) : (
           <DiffView diff={diff} />
         )}

@@ -1,5 +1,413 @@
 /* ─── Platform hub (modal) ───────────────────────────────────────── */
 
+/* ═══════════════════════════════════════════════════════════════════ */
+/*  CodeBurn Dashboard — TUI-inspired design                         */
+/* ═══════════════════════════════════════════════════════════════════ */
+
+/* ─── CodeBurn theme tokens (harmonized with project accent-color) ─── */
+:root {
+  --cb-cost: #c49a3a;
+  --cb-panel-overview: #4a9fe0;
+  --cb-panel-daily: #5aa0e0;
+  --cb-panel-project: #3b8ad4;
+  --cb-panel-top: #c4883b;
+  --cb-panel-activity: #3da080;
+  --cb-panel-model: #7b7ec0;
+  --cb-panel-tools: #3da898;
+  --cb-panel-shell: #c49830;
+  --cb-panel-mcp: #b07098;
+  --cb-grad-start: #4a9fe0;
+  --cb-grad-mid: #3da880;
+  --cb-grad-end: #c06060;
+}
+
+html[data-theme='light'] {
+  --cb-cost: #a07020;
+  --cb-panel-overview: #005bb5;
+  --cb-panel-daily: #0063b1;
+  --cb-panel-project: #004da0;
+  --cb-panel-top: #a06010;
+  --cb-panel-activity: #047857;
+  --cb-panel-model: #4c1d95;
+  --cb-panel-tools: #065f46;
+  --cb-panel-shell: #a06010;
+  --cb-panel-mcp: #9d174d;
+  --cb-grad-start: #3b82f6;
+  --cb-grad-mid: #059669;
+  --cb-grad-end: #dc2626;
+}
+
+/* ─── Layout ─── */
+.codeburn-dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  animation: cbFadeIn 0.3s ease;
+}
+
+.codeburn-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+@media (max-width: 720px) {
+  .codeburn-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+@keyframes cbFadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ─── Period Tabs (codeburn bracket style) ─── */
+.codeburn-period-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 8px;
+  align-items: center;
+}
+
+.codeburn-period-tabs button {
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color 0.12s, background 0.12s;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+}
+
+.codeburn-period-tabs button:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.codeburn-period-tabs button.active {
+  color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 12%, transparent);
+  font-weight: 700;
+}
+
+.codeburn-period-tabs button.active::before {
+  content: '[';
+  margin-right: 4px;
+  opacity: 0.8;
+}
+
+.codeburn-period-tabs button.active::after {
+  content: ']';
+  margin-left: 4px;
+  opacity: 0.8;
+}
+
+/* ─── Panel (round border, per-panel color) ─── */
+.codeburn-panel {
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg-tertiary);
+  display: flex;
+  flex-direction: column;
+}
+
+.codeburn-panel--full {
+  grid-column: 1 / -1;
+}
+
+.codeburn-panel-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 10px 14px 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--panel-border) 30%, var(--border-color));
+  background: color-mix(in srgb, var(--panel-border) 6%, var(--bg-tertiary));
+}
+
+.codeburn-panel-body {
+  padding: 12px 14px 14px;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* ─── Horizontal Gradient Bar ─── */
+.codeburn-hbar-track {
+  height: 7px;
+  background: color-mix(in srgb, var(--bg-primary) 70%, transparent);
+  border-radius: 3.5px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border-color) 40%, transparent);
+}
+
+.codeburn-hbar {
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--cb-grad-start) 0%, var(--cb-grad-mid) 50%, var(--cb-grad-end) 100%);
+  transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+  min-width: 2px;
+}
+
+/* ─── Overview ─── */
+.codeburn-overview {
+  padding: 4px 2px;
+}
+
+.codeburn-overview-brand {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.codeburn-brand-name {
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--accent-color);
+  letter-spacing: -0.02em;
+}
+
+.codeburn-brand-period {
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.codeburn-overview-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px 32px;
+  margin-bottom: 12px;
+}
+
+.codeburn-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.codeburn-metric-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+
+.codeburn-metric--gold {
+  color: var(--cb-cost);
+}
+
+.codeburn-metric-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-secondary);
+}
+
+.codeburn-overview-tokens {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding-top: 10px;
+  border-top: 1px solid var(--border-color);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ─── Shared list styles ─── */
+.codeburn-daily-list,
+.codeburn-project-list,
+.codeburn-top-sessions,
+.codeburn-activity-list,
+.codeburn-model-list,
+.codeburn-tool-list,
+.codeburn-shell-list,
+.codeburn-mcp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Header row */
+.codeburn-daily-header,
+.codeburn-project-header,
+.codeburn-top-header,
+.codeburn-activity-header,
+.codeburn-model-header,
+.codeburn-tool-header,
+.codeburn-shell-header,
+.codeburn-mcp-header {
+  display: grid;
+  gap: 12px;
+  align-items: center;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  padding: 0 6px 8px;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 4px;
+  min-height: 28px;
+}
+
+/* Data row */
+.codeburn-daily-row,
+.codeburn-project-row,
+.codeburn-top-row,
+.codeburn-activity-row,
+.codeburn-model-row,
+.codeburn-tool-row,
+.codeburn-shell-row,
+.codeburn-mcp-row {
+  display: grid;
+  gap: 12px;
+  align-items: center;
+  padding: 7px 6px;
+  font-size: 12px;
+  border-radius: 6px;
+  transition: background 0.12s;
+  min-height: 32px;
+}
+
+.codeburn-daily-row:hover,
+.codeburn-project-row:hover,
+.codeburn-top-row:hover,
+.codeburn-activity-row:hover,
+.codeburn-model-row:hover,
+.codeburn-tool-row:hover,
+.codeburn-shell-row:hover,
+.codeburn-mcp-row:hover {
+  background: color-mix(in srgb, var(--bg-hover) 45%, transparent);
+}
+
+/* ─── Label + HBar wrapper (shared) ─── */
+.codeburn-row-label-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.codeburn-row-label-bar .codeburn-hbar-track {
+  flex: 1 1 0;
+  min-width: 48px;
+}
+
+.codeburn-row-label-bar > span,
+.codeburn-row-label-bar > [class*="-date"],
+.codeburn-row-label-bar > [class*="-name"] {
+  flex: 0 1 auto;
+  min-width: 24px;
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 表头数值列右对齐，与下方数据数字对齐 */
+.codeburn-daily-header > :nth-child(n+2),
+.codeburn-project-header > :nth-child(n+2),
+.codeburn-activity-header > :nth-child(n+2),
+.codeburn-model-header > :nth-child(n+2),
+.codeburn-tool-header > :nth-child(n+2),
+.codeburn-shell-header > :nth-child(n+2),
+.codeburn-mcp-header > :nth-child(n+2),
+.codeburn-top-header > :nth-child(n+2) {
+  text-align: right;
+}
+
+/* ─── Daily Activity ─── */
+.codeburn-daily-header { grid-template-columns: 1fr 76px 56px; }
+.codeburn-daily-row   { grid-template-columns: 1fr 76px 56px; }
+.codeburn-daily-date  { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.codeburn-daily-cost  { color: var(--cb-cost); text-align: right; font-variant-numeric: tabular-nums; }
+.codeburn-daily-calls { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ─── Project ─── */
+.codeburn-project-header { grid-template-columns: 1fr 76px 56px; }
+.codeburn-project-row    { grid-template-columns: 1fr 76px 56px; }
+.codeburn-project-name   { color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.codeburn-project-cost   { color: var(--cb-cost); text-align: right; font-variant-numeric: tabular-nums; }
+.codeburn-project-calls  { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ─── Top Sessions ─── */
+.codeburn-top-header   { grid-template-columns: minmax(0, 1.5fr) 88px 56px 76px; }
+.codeburn-top-row      { grid-template-columns: minmax(0, 1.5fr) 88px 56px 76px; }
+.codeburn-top-project  { color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.codeburn-top-date     { color: var(--text-secondary); font-variant-numeric: tabular-nums; text-align: right; }
+.codeburn-top-calls    { text-align: right; font-variant-numeric: tabular-nums; }
+.codeburn-top-cost     { color: var(--cb-cost); text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ─── Activity ─── */
+.codeburn-activity-header { grid-template-columns: 1fr 76px 56px 56px; }
+.codeburn-activity-row    { grid-template-columns: 1fr 76px 56px 56px; }
+.codeburn-activity-name   { font-weight: 600; min-width: 0; }
+.codeburn-activity-cost   { color: var(--cb-cost); text-align: right; font-variant-numeric: tabular-nums; }
+.codeburn-activity-turns  { text-align: right; font-variant-numeric: tabular-nums; }
+.codeburn-activity-shot   { text-align: right; font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+
+/* ─── Model ─── */
+.codeburn-model-header { grid-template-columns: 1fr 76px 56px 56px; }
+.codeburn-model-row    { grid-template-columns: 1fr 76px 56px 56px; }
+.codeburn-model-name   { color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.codeburn-model-cost   { color: var(--cb-cost); text-align: right; font-variant-numeric: tabular-nums; }
+.codeburn-model-cache  { text-align: right; font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+.codeburn-model-calls  { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ─── Tool / Shell / MCP ─── */
+.codeburn-tool-header  { grid-template-columns: 1fr 56px; }
+.codeburn-tool-row     { grid-template-columns: 1fr 56px; }
+.codeburn-shell-header { grid-template-columns: 1fr 56px; }
+.codeburn-shell-row    { grid-template-columns: 1fr 56px; }
+.codeburn-mcp-header   { grid-template-columns: 1fr 56px; }
+.codeburn-mcp-row      { grid-template-columns: 1fr 56px; }
+
+.codeburn-tool-name,
+.codeburn-shell-name,
+.codeburn-mcp-name {
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.codeburn-tool-calls,
+.codeburn-shell-calls,
+.codeburn-mcp-calls {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.codeburn-mcp-empty {
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 10px 6px;
+  font-style: italic;
+}
+
+/* ─── Warning banner ─── */
+.platform-banner--warning {
+  background: color-mix(in srgb, var(--accent-color) 10%, var(--bg-tertiary));
+  border: 1px solid color-mix(in srgb, var(--accent-color) 35%, var(--border-color));
+  color: var(--text-primary);
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  margin-bottom: 14px;
+  font-size: 13px;
+}
+
 .platform-hub-panel {
   max-width: 960px;
   width: min(96vw, 960px);
