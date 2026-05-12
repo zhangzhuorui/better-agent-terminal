@@ -2,10 +2,12 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import './i18n'
 import App from './App'
-import { settingsStore } from './stores/settings-store'
-import { applyAppTheme } from './utils/apply-app-theme'
 import './styles/base.css'
+import './styles/themes.css'
 import './styles/layout.css'
+import { applyUiTheme, readCachedUiThemePreference } from './utils/apply-ui-theme'
+
+applyUiTheme(readCachedUiThemePreference() ?? 'dark')
 import './styles/panels.css'
 import './styles/settings.css'
 import './styles/context-menu.css'
@@ -30,8 +32,6 @@ const root = document.getElementById('root')!
 root.style.display = ''
 
 dlog(`[startup] before createRoot: +${Date.now() - t0}ms`)
-
-applyAppTheme(settingsStore.getSettings().theme === 'light' ? 'light' : 'dark')
 
 ReactDOM.createRoot(root).render(<App />)
 

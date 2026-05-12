@@ -64,7 +64,14 @@ import { AutomationScheduler } from './automation-scheduler'
 import * as contextPackageStore from './context-package-store'
 import * as analyticsStore from './analytics-store'
 import { listAutomationJobs, saveAutomationJobs } from './automation-jobs'
+import { runCodeburnReport, isCodeburnAvailable } from './codeburn-bridge'
 import type { AutomationJob } from '../src/types/platform-extensions'
+import * as injectionEngine from './injection-engine'
+import * as traceStore from './trace-store'
+import * as auditEngine from './audit-engine'
+import * as retrievalEngine from './retrieval-engine'
+import * as mcpManager from './mcp-manager'
+import * as workflowEngine from './workflow-engine'
 
 // Startup timing — capture module load time before anything else
 const _processStart = Number(process.env._BAT_T0 || Date.now())
@@ -924,7 +931,27 @@ function registerProxiedHandlers() {
   )
   registerHandler('contextPackage:delete', (id: string) => contextPackageStore.deleteContextPackage(id))
 
+  // Content search (messages + context packages)
+  registerHandler('contentSearch:session-messages', (sessionId: string, query: string) =>
+    claudeManager?.searchSessionMessages(sessionId, query) ?? []
+  )
+  registerHandler('contentSearch:context-packages', (query: string) =>
+    contextPackageStore.searchContextPackages(query)
+  )
+
   registerHandler('analytics:getSummary', () => analyticsStore.getAnalyticsSummary())
+
+  registerHandler('analytics:getCodeburnReport', async (options) => {
+    if (!isCodeburnAvailable()) {
+      return { error: 'codeburn_not_installed', available: false }
+    }
+    const report = await runCodeburnReport(options)
+    return report || { error: 'codeburn_failed', available: true }
+  })
+
+  registerHandler('analytics:isCodeburnAvailable', () => {
+    return { available: isCodeburnAvailable() }
+  })
 
   registerHandler('automation:list', () => listAutomationJobs())
   registerHandler('automation:saveAll', (jobs: AutomationJob[]) => saveAutomationJobs(jobs))
@@ -939,6 +966,138 @@ function registerProxiedHandlers() {
   registerHandler('profile:load', (profileId: string) => profileManager.load(profileId))
   registerHandler('profile:get-active-id', () => profileManager.getActiveProfileId())
   registerHandler('profile:set-active', (profileId: string) => profileManager.setActiveProfileId(profileId))
+
+  // Injection engine (auto context package rules)
+  registerHandler('injectionRule:list', () => injectionEngine.listInjectionRules())
+  registerHandler('injectionRule:create', (input: unknown) => injectionEngine.createInjectionRule(input as any))
+  registerHandler('injectionRule:update', (id: string, updates: unknown) => injectionEngine.updateInjectionRule(id, updates as any))
+  registerHandler('injectionRule:delete', (id: string) => injectionEngine.deleteInjectionRule(id))
+  registerHandler('injectionRule:evaluate', (ctx: unknown) => injectionEngine.evaluateInjectionRules(ctx as any))
+
+  // Trace store
+  registerHandler('trace:query', (q: unknown) => traceStore.queryTraces(q as any))
+  registerHandler('trace:stats', (sessionId: string) => traceStore.getTraceStats(sessionId))
+  registerHandler('trace:trim', () => traceStore.trimOldTraces())
+
+  // Audit engine
+  registerHandler('audit:report', (days?: number) => auditEngine.getSecurityReport(days ?? 7))
+  registerHandler('audit:trim', () => auditEngine.trimOldAuditLogs())
+
+  // Retrieval engine
+  registerHandler('search:content', (options: unknown) => retrievalEngine.searchCodeContent(options as any))
+  registerHandler('search:files', (query: string, workspacePath?: string) => retrievalEngine.searchFilesByName(query, workspacePath))
+
+  // MCP server management
+  registerHandler('mcp:list', () => mcpManager.listMcpServers())
+  registerHandler('mcp:get', (id: string) => mcpManager.getMcpServer(id))
+  registerHandler('mcp:create', (input: unknown) => mcpManager.createMcpServer(input as any))
+  registerHandler('mcp:update', (id: string, updates: unknown) => mcpManager.updateMcpServer(id, updates as any))
+  registerHandler('mcp:delete', (id: string) => mcpManager.deleteMcpServer(id))
+  registerHandler('mcp:healthCheck', (id: string) => mcpManager.healthCheckMcpServer(id))
+
+  // Workflow orchestration
+  registerHandler('workflow:list', () => workflowEngine.listWorkflows())
+  registerHandler('workflow:get', (id: string) => workflowEngine.getWorkflow(id))
+  registerHandler('workflow:create', (input: unknown) => workflowEngine.createWorkflow(input as any))
+  registerHandler('workflow:update', (id: string, updates: unknown) => workflowEngine.updateWorkflow(id, updates as any))
+  registerHandler('workflow:delete', (id: string) => workflowEngine.deleteWorkflow(id))
+  registerHandler('workflow:execute', async (workflowId: string) => {
+    const wf = await workflowEngine.getWorkflow(workflowId)
+    if (!wf) return { ok: false, error: 'Workflow not found' }
+    const executor = new workflowEngine.WorkflowExecutor(wf, async (terminalId, prompt) => {
+      // Send message via Claude Agent Manager if session exists, otherwise return false
+      const sessionId = terminalId
+      if (!claudeManager) return false
+      try {
+        return await claudeManager.sendMessage(sessionId, prompt)
+      } catch {
+        return false
+      }
+    })
+    executor.start().catch((err: unknown) => {
+      logger.error('[workflow] execution error:', err)
+    })
+    return { ok: true, executionId: executor.getExecution().id }
+  })
+  registerHandler('workflow:executions', (workflowId?: string, limit?: number) => workflowEngine.listExecutions(workflowId, limit))
+  registerHandler('workflow:getExecution', (id: string) => workflowEngine.getExecution(id))
+  registerHandler('workflow:cancelExecution', (id: string) => workflowEngine.cancelExecution(id))
+
+  // Git enhanced
+  registerHandler('git:stash', async (cwd: string) => {
+    try {
+      const { execFileSync } = await import('child_process')
+      const raw = execFileSync('git', ['stash', 'list', '--pretty=format:%H|%gd|%ar|%s'], { cwd, encoding: 'utf-8', timeout: 5000 }).trim()
+      if (!raw) return []
+      return raw.split('\n').map(line => {
+        const parts = line.split('|')
+        return { index: parseInt(parts[1]?.replace('stash@{', '').replace('}', '')), hash: parts[0], message: parts[3], date: parts[2] }
+      })
+    } catch { return [] }
+  })
+  registerHandler('git:blame', async (cwd: string, filePath: string) => {
+    try {
+      const { execFileSync } = await import('child_process')
+      const raw = execFileSync('git', ['blame', '--porcelain', filePath], { cwd, encoding: 'utf-8', timeout: 10000 }).trim()
+      if (!raw) return []
+      const lines: { lineNumber: number; commitHash: string; author: string; date: string; content: string }[] = []
+      const commits = new Map<string, { author: string; date: string }>()
+      const rawLines = raw.split('\n')
+      let i = 0
+      let lineNumber = 1
+      while (i < rawLines.length) {
+        const line = rawLines[i]
+        if (!line) { i++; continue }
+        const hash = line.substring(0, 40)
+        if (!commits.has(hash)) {
+          // Parse commit header block
+          let j = i + 1
+          let author = ''
+          let date = ''
+          while (j < rawLines.length && rawLines[j].startsWith('\t') === false) {
+            if (rawLines[j].startsWith('author ')) author = rawLines[j].substring(7)
+            if (rawLines[j].startsWith('author-time ')) {
+              const ts = parseInt(rawLines[j].substring(12))
+              date = new Date(ts * 1000).toISOString()
+            }
+            j++
+          }
+          commits.set(hash, { author, date })
+        }
+        // Skip to content line (starts with tab)
+        while (i < rawLines.length && !rawLines[i].startsWith('\t')) i++
+        const content = rawLines[i]?.substring(1) || ''
+        const commit = commits.get(hash) || { author: '', date: '' }
+        lines.push({ lineNumber, commitHash: hash, author: commit.author, date: commit.date, content })
+        lineNumber++
+        i++
+      }
+      return lines
+    } catch { return [] }
+  })
+  registerHandler('git:branchGraph', async (cwd: string) => {
+    try {
+      const { execFileSync } = await import('child_process')
+      const raw = execFileSync('git', ['branch', '-vv'], { cwd, encoding: 'utf-8', timeout: 5000 }).trim()
+      if (!raw) return []
+      return raw.split('\n').map(line => {
+        const current = line.startsWith('*')
+        const clean = current ? line.substring(2).trim() : line.substring(2).trim()
+        const name = clean.split(/\s+/)[0]
+        const aheadBehindMatch = clean.match(/\[([^\]]+)\]/)
+        let ahead = 0, behind = 0
+        if (aheadBehindMatch) {
+          const ab = aheadBehindMatch[1]
+          const aMatch = ab.match(/ahead\s+(\d+)/)
+          const bMatch = ab.match(/behind\s+(\d+)/)
+          if (aMatch) ahead = parseInt(aMatch[1])
+          if (bMatch) behind = parseInt(bMatch[1])
+        }
+        const remoteMatch = clean.match(/->\s+([^\s]+)/)
+        return { name, current, ahead, behind, remote: remoteMatch ? remoteMatch[1] : undefined }
+      })
+    } catch { return [] }
+  })
 }
 
 // ── Bind all proxied handlers to ipcMain ──
@@ -1115,6 +1274,14 @@ function registerLocalHandlers() {
     }
   })
 
+  /** Match renderer `data-theme` / `--bg-primary` to reduce window-edge flash (Electron BrowserWindow background). */
+  ipcMain.handle('app:set-chrome-background', (_event, hex: string) => {
+    const color = typeof hex === 'string' && /^#[0-9a-fA-F]{6}$/.test(hex) ? hex : '#1a1a1a'
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.setBackgroundColor(color)
+    }
+  })
+
   // Open new instance with a specific profile
   ipcMain.handle('app:open-new-instance', async (_event, profileId: string) => {
     const { spawn } = await import('child_process')
@@ -1131,6 +1298,7 @@ function registerLocalHandlers() {
     }
     const detachedWin = new BrowserWindow({
       width: 900, height: 700, minWidth: 600, minHeight: 400,
+      backgroundColor: '#1a1a1a',
       webPreferences: { preload: path.join(__dirname, 'preload.js'), nodeIntegration: false, contextIsolation: true },
       frame: true, titleBarStyle: 'default', icon: nativeImage.createFromPath(path.join(__dirname, process.platform === 'win32' ? '../assets/icon.ico' : '../assets/icon.png'))
     })

@@ -1,6 +1,7 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { settingsStore } from '../stores/settings-store'
+import { workspaceStore } from '../stores/workspace-store'
 
 interface PromptBoxProps {
   terminalId: string
@@ -8,6 +9,12 @@ interface PromptBoxProps {
 
 // Per-terminal history stored in memory
 const historyMap = new Map<string, string[]>()
+
+interface SuggestionItem {
+  name: string
+  path: string
+  isDirectory: boolean
+}
 
 export function PromptBox({ terminalId }: Readonly<PromptBoxProps>) {
   const { t } = useTranslation()
@@ -17,6 +24,11 @@ export function PromptBox({ terminalId }: Readonly<PromptBoxProps>) {
   const [historyIndex, setHistoryIndex] = useState(-1)
   const draftRef = useRef('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const [suggestions, setSuggestions] = useState<SuggestionItem[]>([])
+  const [suggestIndex, setSuggestIndex] = useState(0)
+  const [suggestActive, setSuggestActive] = useState(false)
+  const suggestDebounce = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [searching, setSearching] = useState(false)
 
   useEffect(() => {
     const unsubscribe = settingsStore.subscribe(() => {
@@ -64,6 +76,30 @@ export function PromptBox({ terminalId }: Readonly<PromptBoxProps>) {
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Suggestion navigation takes precedence
+    if (suggestActive && suggestions.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setSuggestIndex(i => (i + 1) % suggestions.length)
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setSuggestIndex(i => (i - 1 + suggestions.length) % suggestions.length)
+        return
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault()
+        applySuggestion(suggestions[suggestIndex])
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setSuggestActive(false)
+        return
+      }
+    }
+
     if (e.key === 'Enter' && e.ctrlKey && !e.nativeEvent.isComposing) {
       e.preventDefault()
       handleSend()
@@ -114,12 +150,84 @@ export function PromptBox({ terminalId }: Readonly<PromptBoxProps>) {
     }
   }
 
+  const getSearchBasePath = useCallback(() => {
+    const state = workspaceStore.getState()
+    const term = state.terminals.find(t => t.id === terminalId)
+    if (!term) return null
+    const ws = state.workspaces.find(w => w.id === term.workspaceId)
+    return term.cwd || ws?.folderPath || null
+  }, [terminalId])
+
+  const fetchSuggestions = useCallback((query: string) => {
+    const basePath = getSearchBasePath()
+    if (!basePath) {
+      setSuggestions([])
+      setSuggestActive(false)
+      return
+    }
+    setSearching(true)
+    window.electronAPI.fs.search(basePath, query).then((results: unknown) => {
+      if (Array.isArray(results)) {
+        setSuggestions(results.slice(0, 8) as SuggestionItem[])
+        setSuggestIndex(0)
+        setSuggestActive(results.length > 0)
+      } else {
+        setSuggestions([])
+        setSuggestActive(false)
+      }
+      setSearching(false)
+    }).catch(() => {
+      setSuggestions([])
+      setSuggestActive(false)
+      setSearching(false)
+    })
+  }, [getSearchBasePath])
+
+  const applySuggestion = (item: SuggestionItem) => {
+    const textarea = textareaRef.current
+    if (!textarea) return
+    const cursor = textarea.selectionStart
+    const before = text.slice(0, cursor)
+    const after = text.slice(cursor)
+    const atIndex = before.lastIndexOf('@')
+    if (atIndex < 0) return
+    const nextText = before.slice(0, atIndex) + item.path + after
+    setText(nextText)
+    setSuggestActive(false)
+    setSuggestions([])
+    requestAnimationFrame(() => {
+      const pos = atIndex + item.path.length
+      textarea.setSelectionRange(pos, pos)
+      textarea.focus()
+    })
+  }
+
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setText(e.target.value)
+    const val = e.target.value
+    setText(val)
     // Reset history navigation when user types
     if (historyIndex !== -1) {
       setHistoryIndex(-1)
       draftRef.current = ''
+    }
+
+    // Check for @ mention
+    const cursor = e.target.selectionStart
+    const before = val.slice(0, cursor)
+    const atIndex = before.lastIndexOf('@')
+    const hasSpaceAfterAt = before.slice(atIndex + 1).includes(' ')
+    if (atIndex >= 0 && !hasSpaceAfterAt && before.slice(atIndex - 1, atIndex) !== '\\') {
+      const query = before.slice(atIndex + 1)
+      if (suggestDebounce.current) clearTimeout(suggestDebounce.current)
+      if (query.length === 0) {
+        setSuggestActive(false)
+        setSuggestions([])
+      } else {
+        suggestDebounce.current = setTimeout(() => fetchSuggestions(query), 200)
+      }
+    } else {
+      setSuggestActive(false)
+      setSuggestions([])
     }
   }
 
@@ -143,26 +251,49 @@ export function PromptBox({ terminalId }: Readonly<PromptBoxProps>) {
 
   return (
     <div className="prompt-box">
-      <div className="prompt-box-inner">
-        <textarea
-          ref={textareaRef}
-          className="prompt-box-textarea"
-          value={text}
-          onChange={handleChange}
-          onKeyDown={handleKeyDown}
-          onPaste={handlePaste}
-          placeholder={imagePath ? t('promptBox.placeholderWithImage') : t('promptBox.placeholder')}
-          style={{ fontFamily }}
-          rows={3}
-        />
-        <button
-          className="prompt-box-send"
-          onClick={handleSend}
-          disabled={!hasContent}
-          title={t('promptBox.sendToTerminal')}
-        >
-          ▶
-        </button>
+      <div className="prompt-box-suggestions">
+        {suggestActive && (
+          <div className="prompt-box-suggestion-list">
+            {searching && (
+              <div className="prompt-box-suggestion-item">{t('common.loading')}</div>
+            )}
+            {!searching && suggestions.length === 0 && (
+              <div className="prompt-box-suggestion-item">No matches</div>
+            )}
+            {!searching && suggestions.map((item, i) => (
+              <div
+                key={item.path}
+                className={`prompt-box-suggestion-item ${i === suggestIndex ? 'active' : ''}`}
+                onClick={() => applySuggestion(item)}
+              >
+                <span className="prompt-box-suggestion-icon">{item.isDirectory ? '📁' : '📄'}</span>
+                <span className="prompt-box-suggestion-name">{item.name}</span>
+                <span className="prompt-box-suggestion-path">{item.path}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="prompt-box-inner">
+          <textarea
+            ref={textareaRef}
+            className="prompt-box-textarea"
+            value={text}
+            onChange={handleChange}
+            onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
+            placeholder={imagePath ? t('promptBox.placeholderWithImage') : t('promptBox.placeholder')}
+            style={{ fontFamily }}
+            rows={3}
+          />
+          <button
+            className="prompt-box-send"
+            onClick={handleSend}
+            disabled={!hasContent}
+            title={t('promptBox.sendToTerminal')}
+          >
+            ▶
+          </button>
+        </div>
       </div>
       <div className="prompt-box-hint">
         {imagePath ? (

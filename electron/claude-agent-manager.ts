@@ -9,6 +9,9 @@ import { logger } from './logger'
 import { getNodeExecutable, isElectronFallback } from './node-resolver'
 import * as analyticsStore from './analytics-store'
 import { formatContextPackagesForPrompt, getContextPackagesByIds } from './context-package-store'
+import * as injectionEngine from './injection-engine'
+import * as traceStore from './trace-store'
+import * as auditEngine from './audit-engine'
 
 // App-level permission mode extends SDK's PermissionMode with bypassPlan
 // bypassPlan = plan mode (read-only exploration) + auto-approve all tool permissions
@@ -353,7 +356,24 @@ export class ClaudeAgentManager {
       .recordUserMessage(options?.analyticsSource === 'automation' ? 'automation' : 'user')
       .catch(e => logger.warn('[analytics] recordUserMessage', e))
 
-    const pkgIds = options?.contextPackageIds?.filter(Boolean) ?? []
+    let pkgIds = options?.contextPackageIds?.filter(Boolean) ?? []
+
+    // Evaluate auto-injection rules
+    try {
+      const injectionResult = await injectionEngine.evaluateInjectionRules({
+        workspacePath: session.cwd || '',
+        agentPreset: (session as any).agentPreset,
+        messageText: prompt,
+        existingPackageIds: pkgIds,
+      })
+      if (injectionResult.matchedRuleIds.length > 0) {
+        pkgIds = injectionResult.mergedPackageIds
+        logger.log(`[injection] applied rules: ${injectionResult.appliedRules.join(', ')}`)
+      }
+    } catch (e) {
+      logger.log(`[injection] evaluation error: ${e}`)
+    }
+
     const packages = pkgIds.length > 0 ? await getContextPackagesByIds(pkgIds) : []
     const queryPrompt = packages.length > 0 ? formatContextPackagesForPrompt(packages, prompt) : prompt
     const pkgNote =
@@ -953,8 +973,26 @@ export class ClaudeAgentManager {
               inputTokens: session.metadata.inputTokens,
               outputTokens: session.metadata.outputTokens,
               totalCost: session.metadata.totalCost,
+              model: session.metadata.model || undefined,
             })
             .catch(e => logger.warn('[analytics] recordAgentTurn', e))
+
+          // Record turn trace
+          traceStore.insertTrace({
+            id: `turn-${sessionId}-${Date.now()}`,
+            sessionId: session.sdkSessionId || sessionId,
+            terminalId: sessionId,
+            rootTraceId: session.sdkSessionId || sessionId,
+            type: 'turn',
+            name: 'agent-turn',
+            status: resultMsg.errors?.length ? 'error' : 'completed',
+            startedAt: Date.now() - (resultMsg.duration_ms || 0),
+            endedAt: Date.now(),
+            durationMs: resultMsg.duration_ms,
+            inputTokens: session.metadata.inputTokens,
+            outputTokens: session.metadata.outputTokens,
+            costUsd: session.metadata.totalCost,
+          })
 
           // Send system notification on agent completion
           this.sendCompletionNotification(session, resultMsg.result)
@@ -1238,6 +1276,19 @@ export class ClaudeAgentManager {
     }
     pending.resolve(result)
     session.pendingPermissions.delete(toolUseId)
+    // Audit: record the resolved permission action
+    try {
+      const action = auditEngine.classifyAction(
+        pending.toolName || 'unknown',
+        pending.input as Record<string, unknown>,
+        session.sdkSessionId || sessionId,
+        sessionId,
+        undefined,
+        result.behavior === 'allow',
+        result.behavior === 'allow' ? 'user' : undefined
+      )
+      void auditEngine.appendAction(action)
+    } catch { /* noop */ }
     // Notify all windows to dismiss the permission UI
     this.send('claude:permission-resolved', sessionId, toolUseId)
     return true
@@ -1654,6 +1705,109 @@ export class ClaudeAgentManager {
     return { newSdkSessionId }
   }
 
+  async searchSessionMessages(sessionId: string, query: string): Promise<Array<{
+    id: string
+    role?: 'user' | 'assistant' | 'system'
+    toolName?: string
+    snippet: string
+    timestamp: number
+    fullContent: string
+  }>> {
+    const term = query.trim().toLowerCase()
+    if (!term) return []
+
+    type ResultItem = {
+      id: string
+      role?: 'user' | 'assistant' | 'system'
+      toolName?: string
+      snippet: string
+      timestamp: number
+      fullContent: string
+    }
+    const results: ResultItem[] = []
+
+    // Search in-memory messages
+    const session = this.sessions.get(sessionId)
+    if (session) {
+      for (const msg of session.state.messages) {
+        if ('toolName' in msg) {
+          const tool = msg as ClaudeToolCall
+          const texts = [
+            tool.toolName,
+            tool.result || '',
+            JSON.stringify(tool.input),
+          ]
+          const combined = texts.join(' ')
+          if (combined.toLowerCase().includes(term)) {
+            results.push({
+              id: tool.id,
+              toolName: tool.toolName,
+              snippet: extractSnippet(combined, term, 120),
+              timestamp: tool.timestamp,
+              fullContent: combined,
+            })
+          }
+        } else {
+          const m = msg as ClaudeMessage
+          const texts = [m.content]
+          if (m.thinking) texts.push(m.thinking)
+          const combined = texts.join('\n')
+          if (combined.toLowerCase().includes(term)) {
+            results.push({
+              id: m.id,
+              role: m.role,
+              snippet: extractSnippet(combined, term, 120),
+              timestamp: m.timestamp,
+              fullContent: combined,
+            })
+          }
+        }
+      }
+    }
+
+    // Search archived messages
+    const archivePath = pathModule.join(app.getPath('userData'), 'message-archives', `${sessionId}.jsonl`)
+    try {
+      const content = await fsPromises.readFile(archivePath, 'utf-8')
+      const lines = content.trim().split('\n').filter(Boolean)
+      for (const line of lines) {
+        const msg = JSON.parse(line) as ClaudeMessage | ClaudeToolCall
+        if ('toolName' in msg) {
+          const tool = msg as ClaudeToolCall
+          const texts = [tool.toolName, tool.result || '', JSON.stringify(tool.input)]
+          const combined = texts.join(' ')
+          if (combined.toLowerCase().includes(term)) {
+            results.push({
+              id: tool.id,
+              toolName: tool.toolName,
+              snippet: extractSnippet(combined, term, 120),
+              timestamp: tool.timestamp,
+              fullContent: combined,
+            })
+          }
+        } else {
+          const m = msg as ClaudeMessage
+          const texts = [m.content]
+          if (m.thinking) texts.push(m.thinking)
+          const combined = texts.join('\n')
+          if (combined.toLowerCase().includes(term)) {
+            results.push({
+              id: m.id,
+              role: m.role,
+              snippet: extractSnippet(combined, term, 120),
+              timestamp: m.timestamp,
+              fullContent: combined,
+            })
+          }
+        }
+      }
+    } catch {
+      // Archive file may not exist
+    }
+
+    return results
+  }
+
   dispose() {
     for (const [id, session] of this.sessions) {
       this.stopSession(id)
@@ -1667,4 +1821,16 @@ export class ClaudeAgentManager {
     this.sessions.clear()
     sdkSessionIds.clear()
   }
+}
+
+function extractSnippet(text: string, term: string, maxLen: number): string {
+  const lower = text.toLowerCase()
+  const idx = lower.indexOf(term)
+  if (idx === -1) return text.slice(0, maxLen)
+  const start = Math.max(0, idx - maxLen / 2)
+  const end = Math.min(text.length, idx + term.length + maxLen / 2)
+  let snippet = text.slice(start, end)
+  if (start > 0) snippet = '...' + snippet
+  if (end < text.length) snippet = snippet + '...'
+  return snippet
 }

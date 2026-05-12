@@ -187,6 +187,48 @@ class WorkspaceStore {
     this.save()
   }
 
+  archiveWorkspace(id: string): void {
+    this.state = {
+      ...this.state,
+      workspaces: this.state.workspaces.map(w =>
+        w.id === id ? { ...w, archived: true } : w
+      )
+    }
+    // If active workspace is archived, switch to first active one
+    const activeWs = this.state.workspaces.find(w => w.id === this.state.activeWorkspaceId)
+    if (activeWs?.archived) {
+      const firstActive = this.state.workspaces.find(w => !w.archived)
+      this.state = {
+        ...this.state,
+        activeWorkspaceId: firstActive?.id ?? null
+      }
+    }
+    this.notify()
+    this.save()
+  }
+
+  unarchiveWorkspace(id: string): void {
+    this.state = {
+      ...this.state,
+      workspaces: this.state.workspaces.map(w =>
+        w.id === id ? { ...w, archived: false } : w
+      )
+    }
+    this.notify()
+    this.save()
+  }
+
+  setWorkspaceOrder(id: string, order: number): void {
+    this.state = {
+      ...this.state,
+      workspaces: this.state.workspaces.map(w =>
+        w.id === id ? { ...w, order } : w
+      )
+    }
+    this.notify()
+    this.save()
+  }
+
   // Workspace environment variables
   setWorkspaceEnvVars(id: string, envVars: import('../types').EnvVariable[]): void {
     this.state = {

@@ -20,3 +20,4 @@ tests/*.json
 /.idea/encodings.xml
 /.idea/compiler.xml
 /.idea/better-agent-terminal.iml
+/.idea/.gitignore

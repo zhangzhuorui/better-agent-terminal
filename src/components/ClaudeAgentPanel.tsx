@@ -10,6 +10,7 @@ import type { ContextPackage } from '../types/platform-extensions'
 import type { Workspace } from '../types'
 import { LinkedText, FilePreviewModal } from './PathLinker'
 import { ContextPackagePickerPopover } from './ContextPackagePickerPopover'
+import { ContentSearchPanel } from './ContentSearchPanel'
 
 interface SessionMeta {
   model?: string
@@ -292,6 +293,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
   const [workspaces, setWorkspaces] = useState<Workspace[]>(() => workspaceStore.getState().workspaces)
   const [contextPkgPickerOpen, setContextPkgPickerOpen] = useState(false)
   const contextPkgBrowseRef = useRef<HTMLDivElement>(null)
+  const [showSearchPanel, setShowSearchPanel] = useState(false)
   // Message archiving — keep renderer memory bounded
   const [loadedArchive, setLoadedArchive] = useState<MessageItem[]>([])
   const [hasMoreArchived, setHasMoreArchived] = useState(false)
@@ -610,10 +612,10 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
     const unsubs = [
       api.onMessage((sid: string, msg: unknown) => {
         if (sid !== sessionId) {
-          console.log(`${tag} SKIP onMessage sid=${sid.slice(0, 8)} (mine=${sessionId.slice(0, 8)})`)
+          window.electronAPI?.debug?.log(`${tag} SKIP onMessage sid=${sid.slice(0, 8)} (mine=${sessionId.slice(0, 8)})`)
           return
         }
-        console.log(`${tag} onMessage`, (msg as ClaudeMessage).id)
+        window.electronAPI?.debug?.log(`${tag} onMessage`, (msg as ClaudeMessage).id)
         workspaceStore.updateTerminalActivity(sessionId)
         const message = msg as ClaudeMessage
         // On restart, sys-init message arrives again — reset messages
@@ -910,7 +912,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
 
       api.onHistory((sid: string, items: unknown[]) => {
         if (sid !== sessionId) {
-          console.log(`${tag} SKIP onHistory sid=${sid.slice(0, 8)} items=${(items as unknown[]).length} (mine=${sessionId.slice(0, 8)})`)
+          window.electronAPI?.debug?.log(`${tag} SKIP onHistory sid=${sid.slice(0, 8)} items=${(items as unknown[]).length} (mine=${sessionId.slice(0, 8)})`)
           return
         }
         const dlog2 = (...args: unknown[]) => window.electronAPI?.debug?.log(...args)
@@ -989,7 +991,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
     ]
 
     return () => {
-      console.log(`${tag} unsubscribing IPC events`)
+      window.electronAPI?.debug?.log(`${tag} unsubscribing IPC events`)
       unsubs.forEach(unsub => unsub())
     }
   }, [sessionId])
@@ -1042,7 +1044,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
   useEffect(() => {
     if (sessionMeta?.sdkSessionId && availableModels.length === 0) {
       window.electronAPI.claude.getSupportedModels(sessionId).then((models: ModelInfo[]) => {
-        console.log('[getSupportedModels] raw response:', JSON.stringify(models, null, 2))
+        window.electronAPI?.debug?.log('[getSupportedModels] raw response:', JSON.stringify(models, null, 2))
         if (models && models.length > 0) {
           setAvailableModels(models)
         }
@@ -1112,7 +1114,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
   }, [sessionId])
 
   const handleResumeSelect = useCallback(async (sdkSessionId: string) => {
-    console.log(`[Claude:${sessionId.slice(0, 8)}] handleResumeSelect sdkSessionId=${sdkSessionId.slice(0, 8)}`)
+    window.electronAPI?.debug?.log(`[Claude:${sessionId.slice(0, 8)}] handleResumeSelect sdkSessionId=${sdkSessionId.slice(0, 8)}`)
     setShowResumeList(false)
     setResumeSessions([])
     // Clear UI immediately so user sees the switch
@@ -1577,7 +1579,18 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
         setTimeout(() => filePickerInputRef.current?.focus(), 50)
         return
       }
+      // Ctrl/Cmd+Shift+F: open content search
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'F') {
+        e.preventDefault()
+        setShowSearchPanel(prev => !prev)
+        return
+      }
       if (e.key === 'Escape') {
+        if (showSearchPanel) {
+          e.preventDefault()
+          setShowSearchPanel(false)
+          return
+        }
         if (filePickerPreview) {
           e.preventDefault()
           setFilePickerPreview(null)
@@ -1703,7 +1716,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
     }
     window.addEventListener('keydown', handleGlobalKeyDown)
     return () => window.removeEventListener('keydown', handleGlobalKeyDown)
-  }, [isActive, isStreaming, handleStop, pendingPermission, permissionFocus, handlePermissionSelect, showResumeList, showModelList, taskModal, contextPkgPickerOpen, contextPickMode, selectionPkgModal, chatSelectionBar, contentModal, showFilePicker, filePickerPreview])
+  }, [isActive, isStreaming, handleStop, pendingPermission, permissionFocus, handlePermissionSelect, showResumeList, showModelList, taskModal, contextPkgPickerOpen, contextPickMode, selectionPkgModal, chatSelectionBar, contentModal, showFilePicker, filePickerPreview, showSearchPanel])
 
   const handleAskUserSubmit = useCallback(() => {
     if (!pendingQuestion) return
@@ -2620,6 +2633,33 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
           </div>
         </div>
       )}
+      {showSearchPanel && (
+        <ContentSearchPanel
+          sessionId={sessionId}
+          open={showSearchPanel}
+          onClose={() => setShowSearchPanel(false)}
+          onJumpToMessage={(messageId) => {
+            const el = userMsgRefsMap.current.get(messageId)
+            if (el) {
+              el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+              el.classList.add('content-search-flash')
+              setTimeout(() => el.classList.remove('content-search-flash'), 1500)
+            }
+          }}
+        />
+      )}
+      {!showSearchPanel && (
+        <button
+          className="claude-search-trigger-floating"
+          onClick={() => setShowSearchPanel(true)}
+          title={t('contentSearch.placeholder')}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="11" cy="11" r="8" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
+        </button>
+      )}
       <div
         className={`claude-messages claude-timeline${contextPickMode && !taskModal ? ' tl-context-pick-mode' : ''}`}
         ref={messagesContainerRef}
@@ -3047,6 +3087,18 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
               onClick={() => refreshContextPackages()}
             >
               {t('claude.contextPackagesRefresh')}
+            </button>
+            <button
+              type="button"
+              className={`claude-context-pkgs-search${showSearchPanel ? ' active' : ''}`}
+              title={t('contentSearch.placeholder')}
+              onClick={() => setShowSearchPanel(o => !o)}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="11" cy="11" r="8" />
+                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+              </svg>
+              {t('contentSearch.messages')}
             </button>
           </div>
         </div>

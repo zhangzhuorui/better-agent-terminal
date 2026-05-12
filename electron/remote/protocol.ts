@@ -18,7 +18,7 @@ export const PROXIED_CHANNELS = new Set([
   'claude:start-session', 'claude:send-message', 'claude:stop-session',
   // Platform extensions
   'contextPackage:list', 'contextPackage:get', 'contextPackage:create', 'contextPackage:update', 'contextPackage:delete',
-  'analytics:getSummary',
+  'analytics:getSummary', 'analytics:getCodeburnReport', 'analytics:isCodeburnAvailable',
   'automation:list', 'automation:saveAll', 'automation:runNow',
   'claude:set-permission-mode', 'claude:set-model', 'claude:set-effort', 'claude:set-1m-context', 'claude:reset-session',
   'claude:get-supported-models', 'claude:get-account-info', 'claude:get-supported-commands', 'claude:get-session-meta',
@@ -27,12 +27,27 @@ export const PROXIED_CHANNELS = new Set([
   'claude:wake-session', 'claude:is-resting',
   'claude:archive-messages', 'claude:load-archived', 'claude:clear-archive',
   'claude:get-usage',
+  'contentSearch:session-messages', 'contentSearch:context-packages',
+  // Injection rules
+  'injectionRule:list', 'injectionRule:create', 'injectionRule:update', 'injectionRule:delete', 'injectionRule:evaluate',
+  // Trace store
+  'trace:query', 'trace:stats', 'trace:trim',
+  // Audit engine
+  'audit:report', 'audit:trim',
+  // Retrieval engine
+  'search:content', 'search:files',
+  // MCP
+  'mcp:list', 'mcp:get', 'mcp:create', 'mcp:update', 'mcp:delete', 'mcp:healthCheck',
+  // Workflow
+  'workflow:list', 'workflow:get', 'workflow:create', 'workflow:update', 'workflow:delete',
+  'workflow:execute', 'workflow:executions', 'workflow:getExecution', 'workflow:cancelExecution',
   // Workspace
   'workspace:save', 'workspace:load',
   // Settings
   'settings:save', 'settings:load', 'settings:get-shell-path',
   // Git
   'git:branch', 'git:log', 'git:diff', 'git:diff-files', 'git:status', 'git:get-github-url', 'git:getRoot',
+  'git:stash', 'git:blame', 'git:branchGraph',
   // FS
   'fs:readdir', 'fs:readFile', 'fs:search',
   // Snippet

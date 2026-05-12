@@ -59,6 +59,7 @@ const electronAPI = {
     openNewInstance: (profileId: string) => ipcRenderer.invoke('app:open-new-instance', profileId),
     getLaunchProfile: () => ipcRenderer.invoke('app:get-launch-profile') as Promise<string | null>,
     setDockBadge: (count: number) => ipcRenderer.invoke('app:set-dock-badge', count),
+    setChromeBackgroundColor: (hex: string) => ipcRenderer.invoke('app:set-chrome-background', hex),
   },
   update: {
     check: () => ipcRenderer.invoke('update:check'),
@@ -207,6 +208,9 @@ const electronAPI = {
     getDiffFiles: (cwd: string, commitHash?: string) => ipcRenderer.invoke('git:diff-files', cwd, commitHash) as Promise<{ status: string; file: string }[]>,
     getStatus: (cwd: string) => ipcRenderer.invoke('git:status', cwd) as Promise<{ status: string; file: string }[]>,
     getRoot: (cwd: string) => ipcRenderer.invoke('git:getRoot', cwd) as Promise<string | null>,
+    getStash: (cwd: string) => ipcRenderer.invoke('git:stash', cwd) as Promise<{ index: number; hash: string; message: string; date: string }[]>,
+    getBlame: (cwd: string, filePath: string) => ipcRenderer.invoke('git:blame', cwd, filePath) as Promise<{ lineNumber: number; commitHash: string; author: string; date: string; content: string }[]>,
+    getBranchGraph: (cwd: string) => ipcRenderer.invoke('git:branchGraph', cwd) as Promise<{ name: string; current: boolean; ahead: number; behind: number; remote?: string }[]>,
   },
   fs: {
     readdir: (dirPath: string) => ipcRenderer.invoke('fs:readdir', dirPath) as Promise<{ name: string; path: string; isDirectory: boolean }[]>,
@@ -282,6 +286,9 @@ const electronAPI = {
   },
   analytics: {
     getSummary: () => ipcRenderer.invoke('analytics:getSummary'),
+    getCodeburnReport: (options: { period?: string; provider?: string; project?: string; exclude?: string }) =>
+      ipcRenderer.invoke('analytics:getCodeburnReport', options),
+    isCodeburnAvailable: () => ipcRenderer.invoke('analytics:isCodeburnAvailable') as Promise<{ available: boolean }>,
   },
   automation: {
     list: () => ipcRenderer.invoke('automation:list'),
@@ -300,7 +307,54 @@ const electronAPI = {
     search: (query: string) => ipcRenderer.invoke('snippet:search', query),
     getCategories: () => ipcRenderer.invoke('snippet:getCategories'),
     getFavorites: () => ipcRenderer.invoke('snippet:getFavorites')
-  }
+  },
+  contentSearch: {
+    searchMessages: (sessionId: string, query: string) => ipcRenderer.invoke('contentSearch:session-messages', sessionId, query),
+    searchContextPackages: (query: string) => ipcRenderer.invoke('contentSearch:context-packages', query),
+  },
+  injectionRule: {
+    list: () => ipcRenderer.invoke('injectionRule:list'),
+    create: (input: unknown) => ipcRenderer.invoke('injectionRule:create', input),
+    update: (id: string, updates: unknown) => ipcRenderer.invoke('injectionRule:update', id, updates),
+    delete: (id: string) => ipcRenderer.invoke('injectionRule:delete', id),
+    evaluate: (ctx: unknown) => ipcRenderer.invoke('injectionRule:evaluate', ctx),
+  },
+  trace: {
+    query: (q: unknown) => ipcRenderer.invoke('trace:query', q),
+    stats: (sessionId: string) => ipcRenderer.invoke('trace:stats', sessionId),
+    trim: () => ipcRenderer.invoke('trace:trim'),
+  },
+  audit: {
+    report: (days?: number) => ipcRenderer.invoke('audit:report', days),
+    trim: () => ipcRenderer.invoke('audit:trim'),
+  },
+  search: {
+    content: (options: unknown) => ipcRenderer.invoke('search:content', options),
+    files: (query: string, workspacePath?: string) => ipcRenderer.invoke('search:files', query, workspacePath),
+  },
+  mcp: {
+    list: () => ipcRenderer.invoke('mcp:list'),
+    get: (id: string) => ipcRenderer.invoke('mcp:get', id),
+    create: (input: { name: string; enabled: boolean; transport: 'stdio' | 'sse' | 'websocket'; command?: string; args?: string[]; env?: Record<string, string>; url?: string; timeoutMs?: number }) =>
+      ipcRenderer.invoke('mcp:create', input),
+    update: (id: string, updates: Partial<{ name: string; enabled: boolean; transport: 'stdio' | 'sse' | 'websocket'; command?: string; args?: string[]; env?: Record<string, string>; url?: string; timeoutMs?: number }>) =>
+      ipcRenderer.invoke('mcp:update', id, updates),
+    delete: (id: string) => ipcRenderer.invoke('mcp:delete', id),
+    healthCheck: (id: string) => ipcRenderer.invoke('mcp:healthCheck', id),
+  },
+  workflow: {
+    list: () => ipcRenderer.invoke('workflow:list'),
+    get: (id: string) => ipcRenderer.invoke('workflow:get', id),
+    create: (input: { name: string; description?: string; enabled: boolean; trigger: unknown; nodes: unknown[]; edges: unknown[] }) =>
+      ipcRenderer.invoke('workflow:create', input),
+    update: (id: string, updates: Partial<{ name: string; description?: string; enabled: boolean; trigger: unknown; nodes: unknown[]; edges: unknown[] }>) =>
+      ipcRenderer.invoke('workflow:update', id, updates),
+    delete: (id: string) => ipcRenderer.invoke('workflow:delete', id),
+    execute: (workflowId: string) => ipcRenderer.invoke('workflow:execute', workflowId),
+    executions: (workflowId?: string, limit?: number) => ipcRenderer.invoke('workflow:executions', workflowId, limit),
+    getExecution: (id: string) => ipcRenderer.invoke('workflow:getExecution', id),
+    cancelExecution: (id: string) => ipcRenderer.invoke('workflow:cancelExecution', id),
+  },
 }
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI)

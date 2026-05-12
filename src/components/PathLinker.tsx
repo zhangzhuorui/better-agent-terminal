@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
 import { useTranslation } from 'react-i18next'
 import hljs from 'highlight.js/lib/core'
-import 'highlight.js/styles/vs2015.css'
+// hljs stylesheet: `applyUiTheme` → `syncHljsStylesheet` (vs2015 / github)
 // Register only the languages we actually use (saves ~800KB vs full highlight.js)
 import typescript from 'highlight.js/lib/languages/typescript'
 import javascript from 'highlight.js/lib/languages/javascript'
@@ -179,7 +179,7 @@ export function HighlightedCode({ code, ext, className }: { code: string; ext: s
       <table className="hlcode-table">
         <tbody>
           {highlightedLines.map((lineHtml, i) => (
-            <tr key={i}>
+            <tr key={i} id={`line-${i + 1}`}>
               <td className="hlcode-ln">{i + 1}</td>
               <td className="hlcode-line" dangerouslySetInnerHTML={{ __html: lineHtml || ' ' }} />
             </tr>

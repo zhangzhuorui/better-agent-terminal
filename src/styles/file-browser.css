@@ -656,3 +656,58 @@
   font-size: 12px;
   white-space: pre-wrap;
 }
+
+/* Symbol outline sidebar */
+.file-symbol-outline {
+  flex: 0 0 180px;
+  max-width: 180px;
+  border-right: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-secondary);
+}
+
+.file-symbol-outline-header {
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.file-symbol-outline-list {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.file-symbol-outline-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-bottom: 1px solid var(--border-color);
+  white-space: nowrap;
+}
+
+.file-symbol-outline-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.file-symbol-outline-icon {
+  flex-shrink: 0;
+  width: 16px;
+  text-align: center;
+  font-size: 10px;
+}
+
+.file-symbol-outline-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

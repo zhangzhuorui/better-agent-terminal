@@ -84,12 +84,27 @@ export async function createContextPackage(input: {
 
 export async function updateContextPackage(
   id: string,
-  updates: Partial<Pick<ContextPackage, 'name' | 'description' | 'content' | 'tags' | 'workspaceRoot'>>
+  updates: Partial<Pick<ContextPackage, 'name' | 'description' | 'content' | 'tags' | 'workspaceRoot'>>,
+  saveVersion = true
 ): Promise<ContextPackage | null> {
   const f = await readFile()
   const idx = f.packages.findIndex(p => p.id === id)
   if (idx === -1) return null
   const cur = f.packages[idx]
+
+  // Save version history before update
+  let versions = cur.versions ? [...cur.versions] : []
+  if (saveVersion && 'content' in updates && updates.content !== undefined && updates.content !== cur.content) {
+    const nextVersionNum = versions.length > 0 ? versions[versions.length - 1].version + 1 : 1
+    versions.push({
+      version: nextVersionNum,
+      content: cur.content,
+      updatedAt: cur.updatedAt,
+    })
+    // Keep at most 20 versions
+    if (versions.length > 20) versions = versions.slice(versions.length - 20)
+  }
+
   const next: ContextPackage = {
     ...cur,
     ...('name' in updates && updates.name !== undefined ? { name: updates.name.trim() || cur.name } : {}),
@@ -100,9 +115,40 @@ export async function updateContextPackage(
       ? { workspaceRoot: updates.workspaceRoot?.trim() ? updates.workspaceRoot.trim() : undefined }
       : {}),
     updatedAt: Date.now(),
+    versions,
   }
   f.packages[idx] = next
   await writeFile(f)
+  logger.log(`[context-packages] updated ${id} "${next.name}" (versions: ${versions.length})`)
+  return next
+}
+
+export async function rollbackContextPackage(id: string, version: number): Promise<ContextPackage | null> {
+  const f = await readFile()
+  const idx = f.packages.findIndex(p => p.id === id)
+  if (idx === -1) return null
+  const cur = f.packages[idx]
+  const target = cur.versions?.find(v => v.version === version)
+  if (!target) return null
+
+  const versions = cur.versions ? [...cur.versions] : []
+  const nextVersionNum = versions.length > 0 ? versions[versions.length - 1].version + 1 : 1
+  versions.push({
+    version: nextVersionNum,
+    content: cur.content,
+    updatedAt: cur.updatedAt,
+  })
+  if (versions.length > 20) versions.slice(versions.length - 20)
+
+  const next: ContextPackage = {
+    ...cur,
+    content: target.content,
+    updatedAt: Date.now(),
+    versions,
+  }
+  f.packages[idx] = next
+  await writeFile(f)
+  logger.log(`[context-packages] rolled back ${id} to version ${version}`)
   return next
 }
 
@@ -113,6 +159,56 @@ export async function deleteContextPackage(id: string): Promise<boolean> {
   if (f.packages.length === len) return false
   await writeFile(f)
   return true
+}
+
+export interface ContextPackageSearchResult {
+  id: string
+  name: string
+  description?: string
+  snippet: string
+  content: string
+  tags?: string[]
+  workspaceRoot?: string
+  updatedAt: number
+}
+
+export async function searchContextPackages(query: string): Promise<ContextPackageSearchResult[]> {
+  const term = query.trim().toLowerCase()
+  if (!term) return []
+  const f = await readFile()
+  const results: ContextPackageSearchResult[] = []
+  for (const p of f.packages) {
+    const nameMatch = p.name.toLowerCase().includes(term)
+    const descMatch = p.description?.toLowerCase().includes(term)
+    const contentMatch = p.content.toLowerCase().includes(term)
+    const tagMatch = p.tags?.some(t => t.toLowerCase().includes(term))
+    if (nameMatch || descMatch || contentMatch || tagMatch) {
+      const snippet = extractSnippet(p.content, term, 120)
+      results.push({
+        id: p.id,
+        name: p.name,
+        description: p.description,
+        snippet,
+        content: p.content,
+        tags: p.tags,
+        workspaceRoot: p.workspaceRoot,
+        updatedAt: p.updatedAt,
+      })
+    }
+  }
+  return results.sort((a, b) => b.updatedAt - a.updatedAt)
+}
+
+function extractSnippet(text: string, term: string, maxLen: number): string {
+  const lower = text.toLowerCase()
+  const idx = lower.indexOf(term)
+  if (idx === -1) return text.slice(0, maxLen)
+  const start = Math.max(0, idx - maxLen / 2)
+  const end = Math.min(text.length, idx + term.length + maxLen / 2)
+  let snippet = text.slice(start, end)
+  if (start > 0) snippet = '...' + snippet
+  if (end < text.length) snippet = snippet + '...'
+  return snippet
 }
 
 /** Format for Claude query prompt (English markers to avoid confusing the model). */

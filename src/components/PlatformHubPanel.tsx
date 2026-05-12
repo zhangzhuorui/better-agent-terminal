@@ -9,10 +9,16 @@ import type {
   AutomationPromptDelivery,
 } from '../types/platform-extensions'
 import type { Workspace } from '../types'
+import type { CodeburnPeriod } from '../types/codeburn'
 import { workspaceStore } from '../stores/workspace-store'
 import { groupContextPackagesForTree, filterContextTreeModel, type ContextFolderGroup } from '../utils/context-package-tree'
+import { useCodeburnReport } from '../hooks/useCodeburnReport'
+import { CodeburnDashboard } from './dashboard/CodeburnDashboard'
+import { LegacyDashboard } from './dashboard/LegacyDashboard'
+import { McpPanel } from './McpPanel'
+import { WorkflowPanel } from './WorkflowPanel'
 
-type TabId = 'dashboard' | 'context' | 'automation'
+type TabId = 'dashboard' | 'context' | 'automation' | 'mcp' | 'workflow'
 type ContextPaneId = 'library' | 'create'
 
 interface PlatformHubPanelProps {
@@ -65,6 +71,9 @@ export function PlatformHubPanel({ onClose }: PlatformHubPanelProps) {
   const [libSearch, setLibSearch] = useState('')
   const [libExpanded, setLibExpanded] = useState<Set<string>>(() => new Set())
   const [libSelectedId, setLibSelectedId] = useState<string | null>(null)
+  const [codeburnPeriod, setCodeburnPeriod] = useState<CodeburnPeriod>('week')
+
+  const { state: codeburnState, refresh: refreshCodeburn } = useCodeburnReport(codeburnPeriod)
 
   const refreshAnalytics = useCallback(() => {
     window.electronAPI.analytics.getSummary().then((s: unknown) => {
@@ -130,19 +139,6 @@ export function PlatformHubPanel({ onClose }: PlatformHubPanelProps) {
     () => terminals.filter(t => t.agentPreset === 'claude-code'),
     [terminals]
   )
-
-  const last7Days = useMemo(() => {
-    const out: string[] = []
-    for (let i = 6; i >= 0; i--) {
-      const d = new Date()
-      d.setDate(d.getDate() - i)
-      const y = d.getFullYear()
-      const m = String(d.getMonth() + 1).padStart(2, '0')
-      const day = String(d.getDate()).padStart(2, '0')
-      out.push(`${y}-${m}-${day}`)
-    }
-    return out
-  }, [])
 
   const handleSavePackage = async () => {
     const wr = pkgBindRoot.trim() || undefined
@@ -310,83 +306,59 @@ export function PlatformHubPanel({ onClose }: PlatformHubPanelProps) {
           <button type="button" className={tab === 'automation' ? 'active' : ''} onClick={() => setTab('automation')}>
             {t('platform.tab.automation')}
           </button>
+          <button type="button" className={tab === 'mcp' ? 'active' : ''} onClick={() => setTab('mcp')}>
+            {t('platform.tab.mcp')}
+          </button>
+          <button type="button" className={tab === 'workflow' ? 'active' : ''} onClick={() => setTab('workflow')}>
+            {t('platform.tab.workflow')}
+          </button>
         </div>
 
         <div className="settings-body platform-hub-body">
           {tab === 'dashboard' && (
             <div className="platform-section">
-              <p className="platform-muted">{t('platform.dashboard.hint')}</p>
-              {summary && (
+              {/* Period switcher */}
+              <div className="codeburn-period-tabs">
+                {(['today', 'week', 'month', '30days'] as const).map(p => (
+                  <button
+                    key={p}
+                    type="button"
+                    className={codeburnPeriod === p ? 'active' : ''}
+                    onClick={() => setCodeburnPeriod(p)}
+                  >
+                    {t(`platform.codeburn.period.${p}`)}
+                  </button>
+                ))}
+              </div>
+
+              {codeburnState.status === 'loading' && (
+                <p className="platform-muted">{t('common.loading')}</p>
+              )}
+
+              {codeburnState.status === 'success' && (
+                <CodeburnDashboard report={codeburnState.data} />
+              )}
+
+              {codeburnState.status === 'unavailable' && (
+                <LegacyDashboard summary={summary} onRefresh={refreshAnalytics} />
+              )}
+
+              {codeburnState.status === 'error' && (
                 <>
-                  <div className="platform-stat-grid">
-                    <div className="platform-stat-card">
-                      <span className="platform-stat-label">{t('platform.dashboard.userMessages')}</span>
-                      <span className="platform-stat-value">{summary.totals.userMessages}</span>
-                    </div>
-                    <div className="platform-stat-card">
-                      <span className="platform-stat-label">{t('platform.dashboard.autoMessages')}</span>
-                      <span className="platform-stat-value">{summary.totals.automationUserMessages}</span>
-                    </div>
-                    <div className="platform-stat-card">
-                      <span className="platform-stat-label">{t('platform.dashboard.agentTurns')}</span>
-                      <span className="platform-stat-value">{summary.totals.agentTurns}</span>
-                    </div>
-                    <div className="platform-stat-card">
-                      <span className="platform-stat-label">{t('platform.dashboard.inputTokens')}</span>
-                      <span className="platform-stat-value">{summary.totals.inputTokens.toLocaleString()}</span>
-                    </div>
-                    <div className="platform-stat-card">
-                      <span className="platform-stat-label">{t('platform.dashboard.outputTokens')}</span>
-                      <span className="platform-stat-value">{summary.totals.outputTokens.toLocaleString()}</span>
-                    </div>
-                    <div className="platform-stat-card">
-                      <span className="platform-stat-label">{t('platform.dashboard.costUsd')}</span>
-                      <span className="platform-stat-value">${summary.totals.costUsd.toFixed(4)}</span>
-                    </div>
-                    <div className="platform-stat-card">
-                      <span className="platform-stat-label">{t('platform.dashboard.autoRuns')}</span>
-                      <span className="platform-stat-value">{summary.totals.automationRuns}</span>
-                    </div>
-                    <div className="platform-stat-card">
-                      <span className="platform-stat-label">{t('platform.dashboard.autoFails')}</span>
-                      <span className="platform-stat-value">{summary.totals.automationFailures}</span>
-                    </div>
+                  <div className="platform-banner platform-banner--warning">
+                    CodeBurn: {codeburnState.error}
                   </div>
-                  <h3 className="platform-subhead">{t('platform.dashboard.last7')}</h3>
-                  <div className="platform-table-wrap">
-                    <table className="platform-table">
-                      <thead>
-                        <tr>
-                          <th>{t('platform.dashboard.col.date')}</th>
-                          <th>{t('platform.dashboard.col.userMsg')}</th>
-                          <th>{t('platform.dashboard.col.turns')}</th>
-                          <th>{t('platform.dashboard.col.tokens')}</th>
-                          <th>{t('platform.dashboard.col.cost')}</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {last7Days.map(day => {
-                          const row = summary.byDay[day]
-                          return (
-                            <tr key={day}>
-                              <td>{day}</td>
-                              <td>{row ? row.userMessages + row.automationUserMessages : 0}</td>
-                              <td>{row?.agentTurns ?? 0}</td>
-                              <td>{row ? (row.inputTokens + row.outputTokens).toLocaleString() : 0}</td>
-                              <td>{row ? `$${row.costUsd.toFixed(4)}` : '$0'}</td>
-                            </tr>
-                          )
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
+                  <LegacyDashboard summary={summary} onRefresh={refreshAnalytics} />
                 </>
               )}
-              <div className="platform-dashboard-actions">
-                <button type="button" className="settings-save-btn" onClick={refreshAnalytics}>
-                  {t('platform.dashboard.refresh')}
-                </button>
-              </div>
+
+              {codeburnState.status === 'success' && (
+                <div className="platform-dashboard-actions">
+                  <button type="button" className="settings-save-btn" onClick={refreshCodeburn}>
+                    {t('platform.dashboard.refresh')}
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
@@ -770,6 +742,9 @@ export function PlatformHubPanel({ onClose }: PlatformHubPanelProps) {
               </ul>
             </div>
           )}
+
+          {tab === 'mcp' && <McpPanel />}
+          {tab === 'workflow' && <WorkflowPanel />}
         </div>
       </div>
     </div>

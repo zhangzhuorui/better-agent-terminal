@@ -18,6 +18,8 @@ export interface Workspace {
   group?: string;                // Workspace 分組
   color?: string;                // Workspace 顏色標籤
   lastSdkSessionId?: string;     // 上次使用的 SDK session ID，下次自動 resume
+  archived?: boolean;            // 是否已歸檔（隱藏但不終止進程）
+  order?: number;                // 排序順序（越小越靠前）
 }
 
 export const WORKSPACE_COLORS = [
@@ -192,6 +194,9 @@ export const AGENT_COMMAND_OPTIONS: { id: AgentCommandType; name: string; comman
 
 export type LanguageCode = 'en' | 'zh-TW' | 'zh-CN';
 
+/** App chrome (sidebar, panels, Claude UI). Terminal colors use `colorPreset` separately. */
+export type UiThemePreference = 'dark' | 'light' | 'system'
+
 export interface AppSettings {
   language: LanguageCode;
   shell: ShellType;
@@ -199,7 +204,7 @@ export interface AppSettings {
   fontSize: number;
   fontFamily: FontType;
   customFontFamily: string;
-  theme: 'dark' | 'light';
+  theme: UiThemePreference;
   colorPreset: ColorPresetId;
   customBackgroundColor: string;
   customForegroundColor: string;

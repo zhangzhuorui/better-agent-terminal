@@ -1,0 +1,64 @@
+{
+  "files": {
+    "electron/context-package-store.ts": {
+      "hash": "1dd4bc5557f8b73c3b3594dfefb4b4d85c59b28f28cf023d9148745f7fca1b28",
+      "session_id": "304fe060",
+      "tool": "Edit"
+    },
+    "electron/claude-agent-manager.ts": {
+      "hash": "94bce61278fcf1268be1cfc1564bc01db14329c4bc32d8d623b29f33fa2c79d2",
+      "session_id": "304fe060",
+      "tool": "Edit"
+    },
+    "electron/main.ts": {
+      "hash": "1630550a514b1c4436e297a6e196d529923fc91cf5dca3d7e21ab99e9ae75174",
+      "session_id": "304fe060",
+      "tool": "Edit"
+    },
+    "electron/preload.ts": {
+      "hash": "8bfc041f6fb26b9f52c8fce3d892b1c4c0b7ecf5e286ee92081836e01f32b677",
+      "session_id": "304fe060",
+      "tool": "Edit"
+    },
+    "src/components/ContentSearchPanel.tsx": {
+      "hash": "76f5dd49c01be8be3458e795774702073d041de57b19b4fd9fe0da69d59c95c7",
+      "session_id": "304fe060",
+      "tool": "Edit"
+    },
+    "src/components/ClaudeAgentPanel.tsx": {
+      "hash": "375d4d154cac8dfee148452498e3de88556107cc9576ced40c7115aa96c05352",
+      "session_id": "304fe060",
+      "tool": "Edit"
+    },
+    "src/types/electron.d.ts": {
+      "hash": "98b39d1a30379822356dab0c8abf69cd4c53ecfb959a0c22cdbdd28bbaf3c4fe",
+      "session_id": "304fe060",
+      "tool": "Write"
+    },
+    "src/styles/claude-agent.css": {
+      "hash": "67febb28bbc91efe62cb4ac7c4d3962199af4b8db6ce0acf637a6ef3dac3b088",
+      "session_id": "304fe060",
+      "tool": "Edit"
+    },
+    "src/locales/zh-CN.json": {
+      "hash": "98b5f159d5f60bf6c6884c56c3135f6a64809a307c288984fc83cffd1749073f",
+      "session_id": "304fe060",
+      "tool": "Edit"
+    },
+    "src/locales/zh-TW.json": {
+      "hash": "a1b2b929f7adebe75b691e0e1ed692a90d084f2014c178c8f86283f0ff8844e9",
+      "session_id": "304fe060",
+      "tool": "Edit"
+    },
+    "src/locales/en.json": {
+      "hash": "51939302a05cae178a60eece75dd9e76ce0d8e1bec9229a921655125ebd6213d",
+      "session_id": "304fe060",
+      "tool": "Edit"
+    },
+    "electron/remote/protocol.ts": {
+      "hash": "7311ff108f9f501e3113fd5babc36a809047823e560d637658b7ce3687ddb39b",
+      "session_id": "304fe060",
+      "tool": "Edit"
+    }
+  }
+}
