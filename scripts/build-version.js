@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 
-// Get version from git tag, environment variable, or generate one
+// Get version from git tag, environment variable, package.json, or generate one
 function getVersion() {
   // 1. Check for VERSION environment variable (set by CI)
   if (process.env.VERSION) {
@@ -24,10 +24,22 @@ function getVersion() {
       return version;
     }
   } catch (e) {
-    // No git tag found, fall through to generated version
+    // No git tag found, fall through
   }
 
-  // 3. Fallback: Generate version based on timestamp
+  // 3. Fallback: use version from package.json
+  try {
+    const packagePath = path.join(__dirname, '..', 'package.json');
+    const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+    if (packageJson.version) {
+      console.log(`Using version from package.json: ${packageJson.version}`);
+      return packageJson.version;
+    }
+  } catch (e) {
+    // package.json not readable, fall through
+  }
+
+  // 4. Final fallback: Generate version based on timestamp
   return generateTimestampVersion();
 }
 

@@ -34,7 +34,26 @@
       "Bash(curl -sL \"https://raw.githubusercontent.com/openai/codex/main/README.md\")",
       "Bash(curl -sL \"https://api.github.com/repos/openai/codex/contents/README.md\")",
       "Bash(curl -sL \"https://api.github.com/repos/openai/codex/contents/docs\")",
-      "Bash(curl -sL \"https://api.github.com/repos/openai/codex/git/trees/main?recursive=1\")"
+      "Bash(curl -sL \"https://api.github.com/repos/openai/codex/git/trees/main?recursive=1\")",
+      "Bash(npm -v)",
+      "Bash(npm run:*)",
+      "Bash(xcode-select -p)",
+      "Bash(xcodebuild -version)",
+      "Bash(npx prebuild-install:*)",
+      "Bash(pkgutil --pkg-info com.apple.pkg.CLTools_Executables)",
+      "Bash(pkgutil --pkg-info com.apple.pkg.CLTools_Base)",
+      "Bash(clang --version)",
+      "Read(//Library/Developer/CommandLineTools/usr/bin/**)",
+      "Bash(curl -s https://api.github.com/repos/WiseLibs/better-sqlite3/releases/latest)",
+      "Bash(curl -L -o prebuild.tar.gz \"https://github.com/WiseLibs/better-sqlite3/releases/download/v12.5.0/better-sqlite3-v12.5.0-electron-v119-darwin-arm64.tar.gz\")",
+      "Bash(grep -A2 -B2 '\"\"runtime\"\"' node_modules/better-sqlite3/build/config.gypi)",
+      "Bash(npx electron-builder:*)",
+      "Read(//Users/zhangzhuorui/Library/Caches/electron/**)",
+      "Read(//Users/zhangzhuorui/.cache/**)",
+      "Bash(zip -r ~/Library/Caches/electron/electron-v28.3.3-darwin-arm64.zip .)",
+      "Bash(npm exec:*)",
+      "Bash(python3 -c \"import yaml; yaml.safe_load\\(open\\(''.github/workflows/build-packages.yml''\\)\\)\")",
+      "Bash(python3 -c \"import yaml; yaml.safe_load\\(open\\(''.github/workflows/release.yml''\\)\\)\")"
     ]
   }
 }

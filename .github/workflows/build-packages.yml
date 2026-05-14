@@ -1,0 +1,176 @@
+name: Build Packages
+
+# Trigger: push to main branch with commit message containing [build]
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    # Only run if commit message contains [build]
+    if: contains(github.event.head_commit.message, '[build]')
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: mac
+            arch: arm64
+          - os: windows-latest
+            platform: win
+            arch: x64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Rebuild native modules for Electron
+        run: npm run rebuild:native
+
+      - name: Get version from package.json
+        id: version
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building version: $VERSION"
+
+      - name: Compile renderer + main process
+        run: npm run compile
+
+      # macOS: if no signing certificate is available, create an unsigned config overlay
+      - name: Prepare unsigned macOS build config
+        if: matrix.platform == 'mac' && secrets.APPLE_CERTIFICATE_P12 == ''
+        shell: bash
+        run: |
+          mkdir -p build
+          cat > build/electron-builder.ci.json << 'EOF'
+          {
+            "extends": "./package.json",
+            "mac": {
+              "identity": null,
+              "notarize": false
+            }
+          }
+          EOF
+          echo "Using unsigned macOS build config"
+
+      - name: Import Apple Code Signing Certificate
+        if: matrix.platform == 'mac' && secrets.APPLE_CERTIFICATE_P12 != ''
+        env:
+          CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          echo "$CERTIFICATE_P12" | base64 --decode > certificate.p12
+          security create-keychain -p actions build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p actions build.keychain
+          security import certificate.p12 -k build.keychain -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k actions build.keychain
+          rm certificate.p12
+
+      - name: Package for macOS
+        if: matrix.platform == 'mac'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -f build/electron-builder.ci.json ]; then
+            npx electron-builder --mac --publish never --config build/electron-builder.ci.json
+          else
+            npx electron-builder --mac --publish never
+          fi
+
+      - name: Package for Windows
+        if: matrix.platform == 'win'
+        run: npx electron-builder --win --publish never
+
+      - name: List release outputs (macOS)
+        if: matrix.platform == 'mac'
+        shell: bash
+        run: ls -lh release/
+
+      - name: List release outputs (Windows)
+        if: matrix.platform == 'win'
+        shell: bash
+        run: ls -lh release/
+
+      - name: Upload macOS artifact
+        if: matrix.platform == 'mac'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-mac
+          path: |
+            release/*.dmg
+            release/*.zip
+
+      - name: Upload Windows artifact
+        if: matrix.platform == 'win'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-win
+          path: |
+            release/*.exe
+            release/*.zip
+
+  # Collect artifacts from all platforms and create/update GitHub Release
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: contains(github.event.head_commit.message, '[build]')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get version from package.json
+        id: version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "Release version: v$VERSION"
+
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-mac
+          path: artifacts/mac
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-win
+          path: artifacts/win
+
+      - name: Display downloaded artifacts
+        run: ls -R artifacts
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.version.outputs.VERSION }}
+          name: v${{ steps.version.outputs.VERSION }}
+          files: |
+            artifacts/mac/*
+            artifacts/win/*
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

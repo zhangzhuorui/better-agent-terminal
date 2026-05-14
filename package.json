@@ -9,7 +9,11 @@
     "compile": "vite build",
     "start": "electron .",
     "build": "vite build && electron-builder",
+    "build:mac": "npm run compile && npm run rebuild:native && electron-builder --mac",
+    "build:win": "npm run compile && npm run rebuild:native && electron-builder --win",
+    "build:linux": "npm run compile && npm run rebuild:native && electron-builder --linux",
     "build:release": "node scripts/build-version.js",
+    "rebuild:native": "electron-rebuild",
     "postinstall": "node -e \"if(process.platform==='darwin'){const p=require('path').join('node_modules/electron/dist/Electron.app/Contents/Info.plist');try{require('child_process').execSync('plutil -replace CFBundleName -string BetterAgentTerminal '+p+' && plutil -replace CFBundleDisplayName -string BetterAgentTerminal '+p)}catch(e){}}\" && echo 'postinstall done'",
     "test:console": "node tests/console-test.js",
     "test:claude-ctrl-o": "node tests/test-claude-ctrl-o.js",
@@ -56,6 +60,7 @@
     "cross-env": "^10.1.0",
     "electron": "^28.3.3",
     "electron-builder": "^24.0.0",
+    "@electron/rebuild": "^3.6.0",
     "png-to-ico": "^3.0.1",
     "sharp": "^0.34.5",
     "ts-node": "^10.9.2",
@@ -129,7 +134,9 @@
     "asarUnpack": [
       "node_modules/@anthropic-ai/claude-code/**/*",
       "node_modules/@anthropic-ai/claude-agent-sdk/**/*",
-      "node_modules/codeburn/**/*"
+      "node_modules/codeburn/**/*",
+      "node_modules/better-sqlite3/**/*",
+      "node_modules/@lydell/node-pty/**/*"
     ]
   }
 }
