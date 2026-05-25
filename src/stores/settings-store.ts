@@ -1,4 +1,4 @@
-import type { AppSettings, ShellType, FontType, ColorPresetId, EnvVariable, AgentCommandType, StatuslineItemConfig, StatuslineItemId, LanguageCode, UiThemePreference } from '../types'
+import type { AppSettings, ShellType, FontType, ColorPresetId, EnvVariable, AgentCommandType, StatuslineItemConfig, StatuslineItemId, LanguageCode, UiThemePreference, AgentConfig, ContextModuleSettings } from '../types'
 import type { AgentPresetId } from '../types/agent-presets'
 import { FONT_OPTIONS, COLOR_PRESETS, AGENT_COMMAND_OPTIONS, STATUSLINE_ITEMS } from '../types'
 import { detectBrowserLanguage } from '../i18n'
@@ -10,6 +10,31 @@ const isWindows = typeof navigator !== 'undefined' && navigator.userAgent.includ
 
 function defaultLanguage(): LanguageCode {
   return detectBrowserLanguage()
+}
+
+function defaultContextModuleSettings(): ContextModuleSettings {
+  return {
+    autoRetrievalMode: 'recommend',
+    autoInjectMaxPackages: 3,
+    autoInjectMinScore: 0.72,
+    contextTokenBudget: 12000,
+    compressionEnabled: true,
+    summarizeOnSave: true,
+    cacheEnabled: true,
+    includeLocalFiles: false,
+  }
+}
+
+function defaultAgentConfigs(): Record<AgentPresetId, AgentConfig> {
+  return {
+    // Claude Code: bundled CLI already works locally; default to local-cli to keep current behavior.
+    'claude-code': { enabled: true, autoStart: true, mode: 'local-cli' },
+    // The other three default to built-in (HTTP/SDK) — user only needs to enter an API key.
+    'codex-cli':   { enabled: true, autoStart: true, mode: 'builtin', builtinModel: 'gpt-4.1' },
+    'gemini-cli':  { enabled: true, autoStart: true, mode: 'builtin', builtinModel: 'gemini-2.5-pro' },
+    'copilot-cli': { enabled: true, autoStart: true, mode: 'builtin', builtinModel: 'gpt-4.1' },
+    'none':        { enabled: true, autoStart: false, mode: 'local-cli' },
+  }
 }
 
 const defaultSettings: AppSettings = {
@@ -32,7 +57,9 @@ const defaultSettings: AppSettings = {
   defaultTerminalCount: 1,
   createDefaultAgentTerminal: true,
   allowBypassPermissions: true,
-  enable1MContext: false
+  enable1MContext: false,
+  agentConfigs: defaultAgentConfigs(),
+  contextModule: defaultContextModuleSettings(),
 }
 
 class SettingsStore {
@@ -199,6 +226,33 @@ class SettingsStore {
     this.save()
   }
 
+  setContextModuleSettings(updates: Partial<ContextModuleSettings>): void {
+    this.settings = {
+      ...this.settings,
+      contextModule: { ...this.settings.contextModule, ...updates },
+    }
+    this.notify()
+    this.save()
+  }
+
+  // Agent configs
+  getAgentConfig(presetId: AgentPresetId): AgentConfig {
+    return this.settings.agentConfigs?.[presetId] ?? { enabled: true, autoStart: true, mode: 'local-cli' }
+  }
+
+  setAgentConfig(presetId: AgentPresetId, config: Partial<AgentConfig>): void {
+    const current = this.settings.agentConfigs ?? defaultAgentConfigs()
+    this.settings = {
+      ...this.settings,
+      agentConfigs: {
+        ...current,
+        [presetId]: { ...(current[presetId] ?? { enabled: true, autoStart: true, mode: 'local-cli' }), ...config }
+      }
+    }
+    this.notify()
+    this.save()
+  }
+
   setShowDockBadge(show: boolean): void {
     this.settings = { ...this.settings, showDockBadge: show }
     this.notify()
@@ -297,7 +351,12 @@ class SettingsStore {
         ) {
           parsed.theme = 'dark'
         }
-        this.settings = { ...defaultSettings, ...parsed }
+        this.settings = {
+          ...defaultSettings,
+          ...parsed,
+          contextModule: { ...defaultContextModuleSettings(), ...parsed.contextModule },
+          agentConfigs: { ...defaultAgentConfigs(), ...parsed.agentConfigs },
+        }
         applyUiTheme(this.settings.theme)
         this.notify()
       } catch (e) {

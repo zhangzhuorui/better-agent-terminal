@@ -2,8 +2,9 @@ import { app } from 'electron'
 import * as fs from 'fs/promises'
 import * as path from 'path'
 import { randomUUID } from 'crypto'
-import type { ContextPackage } from '../src/types/platform-extensions'
+import type { ContextInjectionPlan, ContextPackage, ResolvedContextBlock } from '../src/types/platform-extensions'
 import { logger } from './logger'
+import { generateContextMetadata } from './context-metadata-engine'
 
 const FILE = 'context-packages.json'
 
@@ -65,15 +66,23 @@ export async function createContextPackage(input: {
 }): Promise<ContextPackage> {
   const now = Date.now()
   const wr = input.workspaceRoot?.trim()
+  const id = randomUUID()
+  const name = input.name.trim() || 'Untitled'
+  const description = input.description?.trim() || undefined
+  const tags = input.tags?.length ? input.tags : undefined
+  const generated = generateContextMetadata({ id, name, description, content: input.content, userTags: tags, workspaceRoot: wr || undefined })
   const pkg: ContextPackage = {
-    id: randomUUID(),
-    name: input.name.trim() || 'Untitled',
-    description: input.description?.trim() || undefined,
+    id,
+    name,
+    description,
     content: input.content,
-    tags: input.tags?.length ? input.tags : undefined,
+    tags,
     workspaceRoot: wr || undefined,
     createdAt: now,
     updatedAt: now,
+    metadata: generated.metadata,
+    chunks: generated.chunks,
+    compressed: generated.compressed,
   }
   const f = await readFile()
   f.packages.push(pkg)
@@ -105,7 +114,7 @@ export async function updateContextPackage(
     if (versions.length > 20) versions = versions.slice(versions.length - 20)
   }
 
-  const next: ContextPackage = {
+  const nextBase: ContextPackage = {
     ...cur,
     ...('name' in updates && updates.name !== undefined ? { name: updates.name.trim() || cur.name } : {}),
     ...('description' in updates ? { description: updates.description?.trim() || undefined } : {}),
@@ -117,6 +126,20 @@ export async function updateContextPackage(
     updatedAt: Date.now(),
     versions,
   }
+  const metadataChanged = ['name', 'description', 'content', 'tags', 'workspaceRoot'].some(k => k in updates)
+  const generated = metadataChanged
+    ? generateContextMetadata({
+      id: nextBase.id,
+      name: nextBase.name,
+      description: nextBase.description,
+      content: nextBase.content,
+      userTags: nextBase.tags,
+      workspaceRoot: nextBase.workspaceRoot,
+    })
+    : null
+  const next: ContextPackage = generated
+    ? { ...nextBase, metadata: generated.metadata, chunks: generated.chunks, compressed: generated.compressed }
+    : nextBase
   f.packages[idx] = next
   await writeFile(f)
   logger.log(`[context-packages] updated ${id} "${next.name}" (versions: ${versions.length})`)
@@ -140,11 +163,22 @@ export async function rollbackContextPackage(id: string, version: number): Promi
   })
   if (versions.length > 20) versions.slice(versions.length - 20)
 
+  const generated = generateContextMetadata({
+    id: cur.id,
+    name: cur.name,
+    description: cur.description,
+    content: target.content,
+    userTags: cur.tags,
+    workspaceRoot: cur.workspaceRoot,
+  })
   const next: ContextPackage = {
     ...cur,
     content: target.content,
     updatedAt: Date.now(),
     versions,
+    metadata: generated.metadata,
+    chunks: generated.chunks,
+    compressed: generated.compressed,
   }
   f.packages[idx] = next
   await writeFile(f)
@@ -159,6 +193,61 @@ export async function deleteContextPackage(id: string): Promise<boolean> {
   if (f.packages.length === len) return false
   await writeFile(f)
   return true
+}
+
+export async function generateMetadataForPackage(id: string): Promise<ContextPackage | null> {
+  const f = await readFile()
+  const idx = f.packages.findIndex(p => p.id === id)
+  if (idx === -1) return null
+  const cur = f.packages[idx]
+  const generated = generateContextMetadata({
+    id: cur.id,
+    name: cur.name,
+    description: cur.description,
+    content: cur.content,
+    userTags: cur.tags,
+    workspaceRoot: cur.workspaceRoot,
+  })
+  const next: ContextPackage = { ...cur, metadata: generated.metadata, chunks: generated.chunks, compressed: generated.compressed, updatedAt: Date.now() }
+  f.packages[idx] = next
+  await writeFile(f)
+  logger.log(`[context-packages] regenerated metadata for ${id}`)
+  return next
+}
+
+export async function enrichAllContextPackageMetadata(): Promise<{ updated: number; total: number }> {
+  const f = await readFile()
+  let updated = 0
+  f.packages = f.packages.map(pkg => {
+    const hashMatches = pkg.metadata?.contentHash && pkg.metadata.contentHash === generateContextMetadata({ id: pkg.id, name: pkg.name, description: pkg.description, content: pkg.content, userTags: pkg.tags, workspaceRoot: pkg.workspaceRoot }).metadata.contentHash
+    if (pkg.metadata?.metadataVersion && hashMatches) return pkg
+    const generated = generateContextMetadata({
+      id: pkg.id,
+      name: pkg.name,
+      description: pkg.description,
+      content: pkg.content,
+      userTags: pkg.tags,
+      workspaceRoot: pkg.workspaceRoot,
+    })
+    updated += 1
+    return { ...pkg, metadata: generated.metadata, chunks: generated.chunks, compressed: generated.compressed }
+  })
+  if (updated > 0) await writeFile(f)
+  logger.log(`[context-packages] enriched metadata for ${updated}/${f.packages.length} packages`)
+  return { updated, total: f.packages.length }
+}
+
+export async function getContextPackageMetadataStatus(): Promise<{ total: number; withMetadata: number; stale: number; missing: number }> {
+  const f = await readFile()
+  let withMetadata = 0
+  let stale = 0
+  for (const pkg of f.packages) {
+    if (!pkg.metadata?.contentHash) continue
+    withMetadata += 1
+    const generated = generateContextMetadata({ id: pkg.id, name: pkg.name, description: pkg.description, content: pkg.content, userTags: pkg.tags, workspaceRoot: pkg.workspaceRoot })
+    if (generated.metadata.contentHash !== pkg.metadata.contentHash) stale += 1
+  }
+  return { total: f.packages.length, withMetadata, stale, missing: f.packages.length - withMetadata }
 }
 
 export interface ContextPackageSearchResult {
@@ -218,4 +307,18 @@ export function formatContextPackagesForPrompt(packages: ContextPackage[], userP
     p => `### Context package: ${p.name} (id: ${p.id})\n${p.content.trim()}`
   )
   return `${blocks.join('\n\n---\n\n')}\n\n### User message\n${userPrompt}`
+}
+
+function escapeAttr(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')
+}
+
+export function formatResolvedContextForPrompt(blocks: ResolvedContextBlock[], userPrompt: string, _plan?: ContextInjectionPlan): string {
+  if (!blocks.length) return userPrompt
+  const rendered = blocks.map(block => {
+    const tags = block.tags?.length ? `Tags: ${block.tags.join(', ')}\n` : ''
+    const summary = block.summary ? `Summary: ${block.summary}\n` : ''
+    return `<context-block source="${block.source}" id="${escapeAttr(block.packageId)}" title="${escapeAttr(block.title)}" compression="${block.compression}" tokens="${block.tokenEstimate}">\n${summary}${tags}Content:\n${block.content.trim()}\n</context-block>`
+  })
+  return `### Retrieved Context\nThe following context was selected, rule-injected, or automatically retrieved. Some content may be compressed.\n\n${rendered.join('\n\n')}\n\n### User message\n${userPrompt}`
 }

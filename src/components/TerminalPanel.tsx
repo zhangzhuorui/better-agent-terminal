@@ -9,6 +9,69 @@ import '@xterm/xterm/css/xterm.css'
 
 const dlog = (...args: unknown[]) => window.electronAPI?.debug?.log(...args)
 
+// Detect whether a hex color is light (for choosing appropriate ANSI palette)
+function isLightColor(hex: string): boolean {
+  const sanitized = hex.replace('#', '')
+  const r = parseInt(sanitized.substring(0, 2), 16)
+  const g = parseInt(sanitized.substring(2, 4), 16)
+  const b = parseInt(sanitized.substring(4, 6), 16)
+  // Perceived luminance formula
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255
+  return luminance > 0.5
+}
+
+function getTerminalAnsiTheme(background: string, foreground: string) {
+  const light = isLightColor(background)
+  if (light) {
+    return {
+      background,
+      foreground,
+      cursor: foreground,
+      cursorAccent: background,
+      selectionBackground: '#b4d7ff',
+      black: '#1a1a1a',
+      red: '#d73a49',
+      green: '#22863a',
+      yellow: '#b08800',
+      blue: '#0366d6',
+      magenta: '#6f42c1',
+      cyan: '#0598bc',
+      white: '#6a737d',
+      brightBlack: '#959da5',
+      brightRed: '#cb2431',
+      brightGreen: '#28a745',
+      brightYellow: '#dbab09',
+      brightBlue: '#2188ff',
+      brightMagenta: '#8a63d2',
+      brightCyan: '#39c5cf',
+      brightWhite: '#24292e'
+    }
+  }
+  return {
+    background,
+    foreground,
+    cursor: foreground,
+    cursorAccent: background,
+    selectionBackground: '#5c5142',
+    black: '#3b3228',
+    red: '#cb6077',
+    green: '#beb55b',
+    yellow: '#f4bc87',
+    blue: '#8ab3b5',
+    magenta: '#a89bb9',
+    cyan: '#7bbda4',
+    white: '#d0c8c6',
+    brightBlack: '#554d46',
+    brightRed: '#cb6077',
+    brightGreen: '#beb55b',
+    brightYellow: '#f4bc87',
+    brightBlue: '#8ab3b5',
+    brightMagenta: '#a89bb9',
+    brightCyan: '#7bbda4',
+    brightWhite: '#f5f1e6'
+  }
+}
+
 interface TerminalPanelProps {
   terminalId: string
   isActive?: boolean
@@ -197,29 +260,7 @@ export const TerminalPanel = memo(function TerminalPanel({ terminalId, isActive 
 
     // Create terminal instance with customizable colors
     const terminal = new Terminal({
-      theme: {
-        background: colors.background,
-        foreground: colors.foreground,
-        cursor: colors.cursor,
-        cursorAccent: colors.background,
-        selectionBackground: '#5c5142',
-        black: '#3b3228',
-        red: '#cb6077',
-        green: '#beb55b',
-        yellow: '#f4bc87',
-        blue: '#8ab3b5',
-        magenta: '#a89bb9',
-        cyan: '#7bbda4',
-        white: '#d0c8c6',
-        brightBlack: '#554d46',
-        brightRed: '#cb6077',
-        brightGreen: '#beb55b',
-        brightYellow: '#f4bc87',
-        brightBlue: '#8ab3b5',
-        brightMagenta: '#a89bb9',
-        brightCyan: '#7bbda4',
-        brightWhite: '#f5f1e6'
-      },
+      theme: getTerminalAnsiTheme(colors.background, colors.foreground),
       fontSize: settings.fontSize,
       fontFamily: settingsStore.getFontFamilyString(),
       cursorBlink: true,
@@ -461,13 +502,7 @@ export const TerminalPanel = memo(function TerminalPanel({ terminalId, isActive 
       const newColors = settingsStore.getTerminalColors()
       terminal.options.fontSize = newSettings.fontSize
       terminal.options.fontFamily = settingsStore.getFontFamilyString()
-      terminal.options.theme = {
-        ...terminal.options.theme,
-        background: newColors.background,
-        foreground: newColors.foreground,
-        cursor: newColors.cursor,
-        cursorAccent: newColors.background
-      }
+      terminal.options.theme = getTerminalAnsiTheme(newColors.background, newColors.foreground)
       if (isActiveRef.current) {
         dlog(`[resize] settings changed → doResize terminal=${terminalId}`)
         doResize()

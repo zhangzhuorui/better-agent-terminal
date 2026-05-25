@@ -1,4 +1,5 @@
 import type { CreatePtyOptions } from './index'
+import type { ContextInjectionPlan, ContextPackage, ContextRecommendation, ContextRetrievalOptions } from './platform-extensions'
 
 interface ElectronAPI {
   platform: 'win32' | 'darwin' | 'linux'
@@ -25,6 +26,32 @@ interface ElectronAPI {
     save: (data: string) => Promise<boolean>
     load: () => Promise<string | null>
     getShellPath: (shell: string) => Promise<string>
+  }
+  agent: {
+    checkLocalConfigs: () => Promise<Record<string, { installed: boolean; envReady: boolean; missingEnvVars: string[] }>>
+  }
+  builtinAgent: {
+    startSession: (sessionId: string, presetId: string, opts: { model?: string; systemPrompt?: string; cwd?: string }) => Promise<boolean>
+    sendMessage: (sessionId: string, prompt: string) => Promise<boolean>
+    stopSession: (sessionId: string) => Promise<boolean>
+    getSessionState: (sessionId: string) => Promise<{ sessionId: string; presetId: string; status: 'idle' | 'thinking' | 'acting' | 'error'; messages: { id: string; role: string; content: string; timestamp: number }[]; totalInputTokens: number; totalOutputTokens: number; model: string; error?: string } | null>
+    setModel: (sessionId: string, model: string) => Promise<boolean>
+    getModels: (presetId: string) => Promise<string[]>
+    onMessage: (callback: (sessionId: string, msg: { id: string; role: string; content: string; timestamp: number }) => void) => () => void
+    onStatus: (callback: (sessionId: string, meta: { status: string; model?: string }) => void) => () => void
+    onStream: (callback: (sessionId: string, data: { delta: string; fullContent: string }) => void) => () => void
+    onResult: (callback: (sessionId: string, result: { content: string; inputTokens: number; outputTokens: number }) => void) => () => void
+    onError: (callback: (sessionId: string, error: string) => void) => () => void
+  }
+  secret: {
+    encrypt: (plaintext: string) => Promise<string>
+    decrypt: (stored: string) => Promise<string>
+    isEncryptionAvailable: () => Promise<boolean>
+  }
+  copilotAuth: {
+    start: () => Promise<{ deviceCode: string; userCode: string; verificationUri: string; expiresIn: number; interval: number } | null>
+    poll: (deviceCode: string, interval: number, expiresIn: number) => Promise<{ ok: boolean; accessToken?: string; error?: string }>
+    verify: (accessToken: string) => Promise<boolean>
   }
   dialog: {
     selectFolder: () => Promise<string | null>
@@ -99,6 +126,7 @@ interface ElectronAPI {
     onPermissionResolved: (callback: (sessionId: string, toolUseId: string) => void) => () => void
     onSessionReset: (callback: (sessionId: string) => void) => () => void
     onPromptSuggestion: (callback: (sessionId: string, suggestion: string) => void) => () => void
+    onContextPlan: (callback: (sessionId: string, plan: ContextInjectionPlan) => void) => () => void
   }
   git: {
     getGithubUrl: (folderPath: string) => Promise<string | null>
@@ -152,11 +180,21 @@ interface ElectronAPI {
     log: (...args: unknown[]) => void
   }
   contextPackage: {
-    list: () => Promise<unknown[]>
-    get: (id: string) => Promise<unknown | null>
-    create: (input: { name: string; description?: string; content: string; tags?: string[]; workspaceRoot?: string }) => Promise<unknown>
-    update: (id: string, updates: Partial<{ name: string; description?: string; content: string; tags?: string[]; workspaceRoot?: string }>) => Promise<unknown | null>
+    list: () => Promise<ContextPackage[]>
+    get: (id: string) => Promise<ContextPackage | null>
+    create: (input: { name: string; description?: string; content: string; tags?: string[]; workspaceRoot?: string }) => Promise<ContextPackage>
+    update: (id: string, updates: Partial<{ name: string; description?: string; content: string; tags?: string[]; workspaceRoot?: string }>) => Promise<ContextPackage | null>
     delete: (id: string) => Promise<boolean>
+    generateMetadata: (id: string) => Promise<ContextPackage | null>
+    enrichMetadata: () => Promise<{ updated: number; total: number }>
+    metadataStatus: () => Promise<{ total: number; withMetadata: number; stale: number; missing: number }>
+  }
+  contextRetrieval: {
+    recommend: (options: ContextRetrievalOptions) => Promise<{ recommendations: ContextRecommendation[]; cacheHit: boolean }>
+    plan: (input: unknown) => Promise<ContextInjectionPlan>
+    cacheStats: () => Promise<{ hit: number; miss: number; size: number; lastClearedAt: number }>
+    clearCache: () => Promise<boolean>
+    rebuildIndex: (packageId?: string) => Promise<unknown[]>
   }
   analytics: {
     getSummary: () => Promise<unknown>

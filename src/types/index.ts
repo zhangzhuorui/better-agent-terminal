@@ -185,6 +185,27 @@ export type ColorPresetId = typeof COLOR_PRESETS[number]['id'];
 // Agent command type for auto-start
 export type AgentCommandType = 'claude' | 'gemini' | 'codex' | 'custom';
 
+/** Per-agent configuration in settings */
+export interface AgentConfig {
+  enabled: boolean
+  /** Execution mode: 'builtin' = use bundled SDK/HTTP, 'local-cli' = exec local CLI in PTY */
+  mode?: 'builtin' | 'local-cli'
+  /** Encrypted API key (via Electron safeStorage). Empty when not configured. */
+  apiKey?: string
+  /** Selected model for built-in mode (e.g. 'gpt-4.1', 'gemini-2.5-pro') */
+  builtinModel?: string
+  /** Custom base URL for built-in mode (optional, for self-hosted / proxy) */
+  builtinBaseUrl?: string
+  /** Override the default command (e.g., 'codex --model gpt-4.1') — local-cli mode only */
+  command?: string
+  /** Extra CLI arguments — local-cli mode only */
+  args?: string[]
+  /** Environment variables specific to this agent — local-cli mode only */
+  env?: Record<string, string>
+  /** Auto-start when creating a new agent terminal — local-cli mode only */
+  autoStart: boolean
+}
+
 export const AGENT_COMMAND_OPTIONS: { id: AgentCommandType; name: string; command: string }[] = [
   { id: 'claude', name: 'Claude Code', command: 'claude' },
   { id: 'gemini', name: 'Gemini CLI', command: 'gemini' },
@@ -196,6 +217,17 @@ export type LanguageCode = 'en' | 'zh-TW' | 'zh-CN';
 
 /** App chrome (sidebar, panels, Claude UI). Terminal colors use `colorPreset` separately. */
 export type UiThemePreference = 'dark' | 'light' | 'system'
+
+export interface ContextModuleSettings {
+  autoRetrievalMode: 'off' | 'recommend' | 'inject'
+  autoInjectMaxPackages: number
+  autoInjectMinScore: number
+  contextTokenBudget: number
+  compressionEnabled: boolean
+  summarizeOnSave: boolean
+  cacheEnabled: boolean
+  includeLocalFiles: boolean
+}
 
 export interface AppSettings {
   language: LanguageCode;
@@ -223,6 +255,9 @@ export interface AppSettings {
   notifySound?: boolean;               // 通知時播放聲音
   notifyOnlyBackground?: boolean;      // 僅在視窗不在前景時通知
   statuslineItems?: StatuslineItemConfig[];  // 自訂 statusline 項目排序和顯示
+  /** Per-agent configuration map: presetId → config */
+  agentConfigs?: Record<AgentPresetId, AgentConfig>
+  contextModule: ContextModuleSettings
 }
 
 // ============================================

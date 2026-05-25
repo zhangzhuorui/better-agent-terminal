@@ -18,6 +18,8 @@ export const PROXIED_CHANNELS = new Set([
   'claude:start-session', 'claude:send-message', 'claude:stop-session',
   // Platform extensions
   'contextPackage:list', 'contextPackage:get', 'contextPackage:create', 'contextPackage:update', 'contextPackage:delete',
+  'contextPackage:generateMetadata', 'contextPackage:enrichMetadata', 'contextPackage:metadataStatus',
+  'contextRetrieval:recommend', 'contextRetrieval:plan', 'contextRetrieval:cacheStats', 'contextRetrieval:clearCache', 'contextRetrieval:rebuildIndex',
   'analytics:getSummary', 'analytics:getCodeburnReport', 'analytics:isCodeburnAvailable',
   'automation:list', 'automation:saveAll', 'automation:runNow',
   'claude:set-permission-mode', 'claude:set-model', 'claude:set-effort', 'claude:set-1m-context', 'claude:reset-session',
@@ -45,6 +47,15 @@ export const PROXIED_CHANNELS = new Set([
   'workspace:save', 'workspace:load',
   // Settings
   'settings:save', 'settings:load', 'settings:get-shell-path',
+  // Agent
+  'agent:check-local-configs',
+  // Built-in agent (in-process HTTP backend)
+  'builtin-agent:start-session', 'builtin-agent:send-message', 'builtin-agent:stop-session',
+  'builtin-agent:get-session-state', 'builtin-agent:set-model', 'builtin-agent:get-models',
+  // Secret store
+  'secret:encrypt', 'secret:decrypt', 'secret:isEncryptionAvailable',
+  // Copilot auth
+  'copilot-auth:start', 'copilot-auth:poll', 'copilot-auth:verify',
   // Git
   'git:branch', 'git:log', 'git:diff', 'git:diff-files', 'git:status', 'git:get-github-url', 'git:getRoot',
   'git:stash', 'git:blame', 'git:branchGraph',
@@ -64,7 +75,10 @@ export const PROXIED_EVENTS = new Set([
   'claude:message', 'claude:tool-use', 'claude:tool-result',
   'claude:stream', 'claude:result', 'claude:error',
   'claude:status', 'claude:permission-request', 'claude:permission-resolved', 'claude:ask-user', 'claude:ask-user-resolved',
-  'claude:modeChange', 'claude:history', 'claude:prompt-suggestion', 'claude:session-reset',
+  'claude:modeChange', 'claude:history', 'claude:prompt-suggestion', 'claude:session-reset', 'claude:context-plan',
+  // Built-in agent events
+  'builtin-agent:message', 'builtin-agent:status', 'builtin-agent:stream',
+  'builtin-agent:result', 'builtin-agent:error',
   'fs:changed',
   'workspace:detached', 'workspace:reattached',
   'system:resume',

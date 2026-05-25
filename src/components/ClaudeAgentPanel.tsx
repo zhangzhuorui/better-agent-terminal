@@ -6,7 +6,7 @@ import { isToolCall } from '../types/claude-agent'
 import { settingsStore } from '../stores/settings-store'
 import { workspaceStore } from '../stores/workspace-store'
 import type { AgentPresetId } from '../types/agent-presets'
-import type { ContextPackage } from '../types/platform-extensions'
+import type { ContextInjectionPlan, ContextPackage, ContextRecommendation } from '../types/platform-extensions'
 import type { Workspace } from '../types'
 import { LinkedText, FilePreviewModal } from './PathLinker'
 import { ContextPackagePickerPopover } from './ContextPackagePickerPopover'
@@ -259,6 +259,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
   const [taskModalTick, setTaskModalTick] = useState(0)
   const [showPromptHistory, setShowPromptHistory] = useState(false)
   const [promptSuggestion, setPromptSuggestion] = useState<string | null>(null)
+  const [inputRevision, setInputRevision] = useState(0)
   const [statuslineConfig, setStatuslineConfig] = useState(settingsStore.getStatuslineItems())
   const [accountInfo, setAccountInfo] = useState<{ email?: string; organization?: string; subscriptionType?: string } | null>(null)
   const [slashCommands, setSlashCommands] = useState<SlashCommandInfo[]>([])
@@ -274,6 +275,8 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
   const [filePickerPreview, setFilePickerPreview] = useState<string | null>(null)
   const filePickerInputRef = useRef<HTMLInputElement>(null)
   const [availableContextPkgs, setAvailableContextPkgs] = useState<ContextPackage[]>([])
+  const [contextRecommendations, setContextRecommendations] = useState<ContextRecommendation[]>([])
+  const [lastContextPlan, setLastContextPlan] = useState<ContextInjectionPlan | null>(null)
   const [attachedPkgIds, setAttachedPkgIds] = useState<string[]>(() => {
     const term = workspaceStore.getState().terminals.find(t => t.id === sessionId)
     return term?.contextPackageIds ?? []
@@ -430,6 +433,14 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
     refreshContextPackages()
   }, [refreshContextPackages])
 
+  const addRecommendedContextPackage = useCallback(
+    (id: string) => {
+      if (attachedPkgIds.includes(id)) return
+      workspaceStore.setTerminalContextPackages(sessionId, [...attachedPkgIds, id])
+    },
+    [attachedPkgIds, sessionId]
+  )
+
   const removeAttachedContextPackage = useCallback(
     (id: string) => {
       workspaceStore.setTerminalContextPackages(
@@ -447,6 +458,35 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
     const path = (ws?.folderPath || cwd || '').trim()
     return path || undefined
   }, [workspaceId, sessionId, cwd, workspaces])
+
+  useEffect(() => {
+    if (!isActive || isStreaming) return
+    const prompt = inputValueRef.current.trim()
+    if (prompt.length < 12) {
+      setContextRecommendations([])
+      return
+    }
+    const timer = setTimeout(() => {
+      window.electronAPI.contextRetrieval.recommend({
+        prompt,
+        workspacePath: defaultPackageWorkspaceRoot,
+        agentPreset: 'claude-code',
+        excludePackageIds: attachedPkgIds,
+        limit: 5,
+      }).then(result => {
+        setContextRecommendations(result.recommendations)
+        window.electronAPI.debug.log(`[context] recommendations ${result.recommendations.length}, cacheHit=${result.cacheHit}`)
+      }).catch(err => {
+        window.electronAPI.debug.log('[context] recommendation error', String(err))
+        setContextRecommendations([])
+      })
+    }, 500)
+    return () => clearTimeout(timer)
+  }, [inputRevision, isActive, isStreaming, defaultPackageWorkspaceRoot, attachedPkgIds])
+
+  useEffect(() => window.electronAPI.claude.onContextPlan((sid, plan) => {
+    if (sid === sessionId) setLastContextPlan(plan)
+  }), [sessionId])
 
   // Auto-scroll streaming thinking <pre> to bottom so latest content is visible
   useEffect(() => {
@@ -1351,6 +1391,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
   const handleInputChange = useCallback((e: React.FormEvent<HTMLTextAreaElement>) => {
     const val = (e.target as HTMLTextAreaElement).value
     inputValueRef.current = val
+    setInputRevision(x => x + 1)
     // Show slash command menu when typing / at the start
     if (val.startsWith('/') && !val.includes(' ')) {
       setShowSlashMenu(true)
@@ -3109,9 +3150,39 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
           workspaces={workspaces}
           terminalWorkspaceId={workspaceId}
           selectedIds={attachedPkgIds}
+          recommendations={contextRecommendations}
           onClose={() => setContextPkgPickerOpen(false)}
           onApply={ids => workspaceStore.setTerminalContextPackages(sessionId, ids)}
         />
+        {contextRecommendations.length > 0 && !isStreaming && (
+          <div className="claude-context-recommendations">
+            <span className="claude-context-recommendations-label">{t('claude.contextRecommendations')}</span>
+            {contextRecommendations.map(rec => (
+              <button
+                key={rec.packageId}
+                type="button"
+                className="claude-context-recommendation-chip"
+                title={`${rec.reasons.join(', ')} · ${rec.tokenEstimate ?? 0} tokens`}
+                onClick={() => addRecommendedContextPackage(rec.packageId)}
+              >
+                <span>{rec.name}</span>
+                <span>{Math.round(rec.score * 100)}%</span>
+                <span>{t('claude.contextRecommendationAdd')}</span>
+              </button>
+            ))}
+          </div>
+        )}
+        {lastContextPlan && (
+          <div className="claude-context-plan-note">
+            {t('claude.contextPlanNote', {
+              mode: lastContextPlan.mode,
+              explicit: lastContextPlan.explicitPackageIds.length,
+              rule: lastContextPlan.rulePackageIds.length,
+              auto: lastContextPlan.recommendedPackageIds.length,
+              tokens: lastContextPlan.estimatedTokens,
+            })}
+          </div>
+        )}
         {/* Prompt suggestion chip */}
         {promptSuggestion && !isStreaming && (
           <div className="claude-prompt-suggestion" onClick={() => {

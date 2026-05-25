@@ -31,6 +31,84 @@ interface RemoteServerStatus {
   clients: { label: string; connectedAt: number }[]
 }
 
+// ── Copilot Device Flow Button ───────────────────────────────────────
+function CopilotDeviceFlowButton({ hasToken, onTokenAcquired }: {
+  hasToken: boolean
+  onTokenAcquired: (token: string) => Promise<void>
+}) {
+  const [state, setState] = useState<'idle' | 'starting' | 'awaiting' | 'success' | 'error'>('idle')
+  const [userCode, setUserCode] = useState('')
+  const [verificationUri, setVerificationUri] = useState('')
+  const [errorMsg, setErrorMsg] = useState('')
+
+  const handleStart = useCallback(async () => {
+    setState('starting')
+    setErrorMsg('')
+    try {
+      const start = await window.electronAPI.copilotAuth.start()
+      if (!start) {
+        setErrorMsg('Failed to start device flow')
+        setState('error')
+        return
+      }
+      setUserCode(start.userCode)
+      setVerificationUri(start.verificationUri)
+      setState('awaiting')
+
+      const result = await window.electronAPI.copilotAuth.poll(
+        start.deviceCode,
+        start.interval,
+        start.expiresIn,
+      )
+      if (result.ok && result.accessToken) {
+        await onTokenAcquired(result.accessToken)
+        setState('success')
+      } else {
+        setErrorMsg(result.error || 'Authorization failed')
+        setState('error')
+      }
+    } catch (err: unknown) {
+      setErrorMsg(err instanceof Error ? err.message : String(err))
+      setState('error')
+    }
+  }, [onTokenAcquired])
+
+  if (state === 'awaiting') {
+    return (
+      <div style={{ padding: 10, background: 'var(--bg-tertiary)', borderRadius: 6, fontSize: 12 }}>
+        <div style={{ marginBottom: 6 }}>
+          <strong>1.</strong> Open <a href={verificationUri} onClick={e => { e.preventDefault(); window.electronAPI?.shell?.openExternal?.(verificationUri) }} style={{ color: 'var(--accent-color)' }}>{verificationUri}</a>
+        </div>
+        <div style={{ marginBottom: 6 }}>
+          <strong>2.</strong> Enter code: <code style={{ fontSize: 14, padding: '2px 8px', background: 'var(--bg-primary)', borderRadius: 4, letterSpacing: 2 }}>{userCode}</code>
+        </div>
+        <div style={{ marginTop: 8, color: 'var(--text-secondary)' }}>Waiting for authorization...</div>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+      <button
+        className="profile-action-btn primary"
+        onClick={handleStart}
+        disabled={state === 'starting'}
+      >
+        {state === 'starting' ? 'Starting…' : hasToken ? 'Re-authenticate with GitHub' : 'Sign in with GitHub'}
+      </button>
+      {hasToken && state === 'idle' && (
+        <span style={{ fontSize: 12, color: 'var(--success-color, #3fb950)' }}>✓ Authenticated</span>
+      )}
+      {state === 'success' && (
+        <span style={{ fontSize: 12, color: 'var(--success-color, #3fb950)' }}>✓ Sign-in complete</span>
+      )}
+      {state === 'error' && (
+        <span style={{ fontSize: 12, color: 'var(--danger-color)' }}>{errorMsg}</span>
+      )}
+    </div>
+  )
+}
+
 interface RemoteClientStatus {
   connected: boolean
   info: { host: string; port: number } | null
@@ -64,6 +142,13 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
   const [slImporting, setSlImporting] = useState(false)
   const [slImportText, setSlImportText] = useState('')
 
+  // Settings tabs
+  const [activeTab, setActiveTab] = useState<'general' | 'agents' | 'context'>('general')
+  const [contextCacheStats, setContextCacheStats] = useState<{ hit: number; miss: number; size: number; lastClearedAt: number } | null>(null)
+
+  // Agent local config detection
+  const [agentChecks, setAgentChecks] = useState<Record<string, { installed: boolean; envReady: boolean; missingEnvVars: string[] }>>({})
+
   // Get current platform for filtering shell options
   const platform = window.electronAPI?.platform || 'darwin'
   const platformShellOptions = SHELL_OPTIONS.filter(opt => opt.platforms.includes(platform))
@@ -89,6 +174,27 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
       setAvailableFonts(available)
     }
     checkFonts()
+  }, [])
+
+  useEffect(() => {
+    window.electronAPI.contextRetrieval.cacheStats().then(setContextCacheStats).catch(() => {})
+  }, [])
+
+  // Detect local agent installations on mount
+  useEffect(() => {
+    window.electronAPI.agent.checkLocalConfigs().then(configs => {
+      setAgentChecks(configs)
+      // Auto-disable agents that are not locally installed
+      for (const preset of AGENT_PRESETS.filter(p => p.id !== 'none')) {
+        const check = configs[preset.id]
+        if (check && !check.installed) {
+          const config = settingsStore.getAgentConfig(preset.id)
+          if (config.enabled) {
+            settingsStore.setAgentConfig(preset.id, { enabled: false })
+          }
+        }
+      }
+    }).catch(() => {})
   }, [])
 
   const handleShellChange = (shell: ShellType) => {
@@ -206,7 +312,33 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
           <button className="close-btn" onClick={onClose}>×</button>
         </div>
 
+        <div className="settings-tabs">
+          <button
+            type="button"
+            className={activeTab === 'general' ? 'active' : ''}
+            onClick={() => setActiveTab('general')}
+          >
+            {t('settings.tabGeneral')}
+          </button>
+          <button
+            type="button"
+            className={activeTab === 'agents' ? 'active' : ''}
+            onClick={() => setActiveTab('agents')}
+          >
+            {t('settings.tabAgents')}
+          </button>
+          <button
+            type="button"
+            className={activeTab === 'context' ? 'active' : ''}
+            onClick={() => setActiveTab('context')}
+          >
+            {t('settings.tabContext')}
+          </button>
+        </div>
+
         <div className="settings-content">
+          {activeTab === 'general' && (
+            <>
           <div className="settings-section">
             <h3>{t('settings.language')}</h3>
             <div className="settings-group">
@@ -640,6 +772,290 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
             </div>
           </div>
 
+            </>
+          )}
+
+          {activeTab === 'context' && (
+            <div className="settings-section">
+              <h3>{t('settings.contextModule')}</h3>
+              <div className="settings-group">
+                <label>{t('settings.contextAutoMode')}</label>
+                <select
+                  value={settings.contextModule.autoRetrievalMode}
+                  onChange={e => settingsStore.setContextModuleSettings({ autoRetrievalMode: e.target.value as 'off' | 'recommend' | 'inject' })}
+                >
+                  <option value="off">{t('settings.contextModeOff')}</option>
+                  <option value="recommend">{t('settings.contextModeRecommend')}</option>
+                  <option value="inject">{t('settings.contextModeInject')}</option>
+                </select>
+              </div>
+              <div className="settings-group">
+                <label>{t('settings.contextMaxPackages', { count: settings.contextModule.autoInjectMaxPackages })}</label>
+                <input type="range" min="1" max="8" value={settings.contextModule.autoInjectMaxPackages} onChange={e => settingsStore.setContextModuleSettings({ autoInjectMaxPackages: Number(e.target.value) })} />
+              </div>
+              <div className="settings-group">
+                <label>{t('settings.contextMinScore', { score: settings.contextModule.autoInjectMinScore.toFixed(2) })}</label>
+                <input type="range" min="0.1" max="0.95" step="0.01" value={settings.contextModule.autoInjectMinScore} onChange={e => settingsStore.setContextModuleSettings({ autoInjectMinScore: Number(e.target.value) })} />
+              </div>
+              <div className="settings-group">
+                <label>{t('settings.contextTokenBudget')}</label>
+                <input type="number" min="1000" step="1000" value={settings.contextModule.contextTokenBudget} onChange={e => settingsStore.setContextModuleSettings({ contextTokenBudget: Number(e.target.value) || 12000 })} />
+              </div>
+              {[
+                ['compressionEnabled', 'settings.contextCompression'],
+                ['summarizeOnSave', 'settings.contextSummarizeOnSave'],
+                ['cacheEnabled', 'settings.contextCacheEnabled'],
+                ['includeLocalFiles', 'settings.contextIncludeLocalFiles'],
+              ].map(([key, label]) => (
+                <div key={key} className="settings-group checkbox-group">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(settings.contextModule[key as keyof typeof settings.contextModule])}
+                      onChange={e => settingsStore.setContextModuleSettings({ [key]: e.target.checked } as any)}
+                    />
+                    {t(label)}
+                  </label>
+                </div>
+              ))}
+              <div className="settings-group">
+                <label>{t('settings.contextCacheStats')}</label>
+                <p className="settings-hint">
+                  {contextCacheStats ? `hit=${contextCacheStats.hit}, miss=${contextCacheStats.miss}, size=${contextCacheStats.size}` : '-'}
+                </p>
+                <button
+                  type="button"
+                  className="settings-save-btn"
+                  onClick={() => window.electronAPI.contextRetrieval.clearCache().then(() => window.electronAPI.contextRetrieval.cacheStats()).then(setContextCacheStats)}
+                >
+                  {t('settings.contextClearCache')}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'agents' && (
+            <div className="settings-section">
+              <h3>{t('settings.agentConfig')}</h3>
+              {AGENT_PRESETS.filter(p => p.id !== 'none').map(preset => {
+                const config = settingsStore.getAgentConfig(preset.id)
+                const check = agentChecks[preset.id]
+                const isInstalled = check?.installed ?? true
+                const isEnvReady = check?.envReady ?? true
+                const isBuiltin = config.mode === 'builtin'
+                return (
+                  <div
+                    key={preset.id}
+                    className={`agent-config-card${!isInstalled && !isBuiltin ? ' agent-config-card--disabled' : ''}`}
+                  >
+                    {/* Header */}
+                    <div className="agent-config-header">
+                      <div className="agent-config-title">
+                        <span className="agent-config-icon" style={{ color: preset.color }}>{preset.icon}</span>
+                        <strong>{preset.name}</strong>
+                        <span className="agent-config-badge">
+                          {isBuiltin ? 'Built-in' : preset.type === 'sdk' ? 'SDK' : 'CLI'}
+                        </span>
+                      </div>
+                      <label className="agent-config-toggle">
+                        <input
+                          type="checkbox"
+                          checked={config.enabled}
+                          disabled={!isInstalled && !isBuiltin}
+                          onChange={e => settingsStore.setAgentConfig(preset.id, { enabled: e.target.checked })}
+                        />
+                        <span>{t('settings.agentEnabled')}</span>
+                      </label>
+                    </div>
+
+                    {/* Mode switcher (for non-SDK agents) */}
+                    {preset.type !== 'sdk' && (
+                      <div className="agent-config-mode-bar">
+                        <button
+                          className={`agent-config-mode-btn${isBuiltin ? ' active' : ''}`}
+                          onClick={() => settingsStore.setAgentConfig(preset.id, { mode: 'builtin' })}
+                        >
+                          {t('settings.agentModeBuiltin')}
+                        </button>
+                        <button
+                          className={`agent-config-mode-btn${!isBuiltin ? ' active' : ''}`}
+                          onClick={() => settingsStore.setAgentConfig(preset.id, { mode: 'local-cli' })}
+                        >
+                          {t('settings.agentModeLocalCli')}
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Status alerts */}
+                    {!isInstalled && !isBuiltin && (
+                      <div className="agent-config-alert agent-config-alert--danger">
+                        <div>{t('settings.agentNotInstalled', { command: preset.command })}</div>
+                        {preset.docsUrl && (
+                          <a
+                            href={preset.docsUrl}
+                            onClick={e => { e.preventDefault(); window.electronAPI?.shell?.openExternal?.(e.currentTarget.href) }}
+                          >
+                            {t('settings.agentDocs')} ↗
+                          </a>
+                        )}
+                      </div>
+                    )}
+                    {isInstalled && !isEnvReady && !isBuiltin && check?.missingEnvVars && (
+                      <div className="agent-config-alert agent-config-alert--warning">
+                        {t('settings.agentMissingEnv', { vars: check.missingEnvVars.join(', ') })}
+                      </div>
+                    )}
+                    {isBuiltin && !config.apiKey && (preset.apiKeyEnvVar || preset.id === 'copilot-cli') && (
+                      <div className="agent-config-alert agent-config-alert--warning">
+                        {t('settings.agentMissingApiKey')}
+                      </div>
+                    )}
+
+                    {/* Fields */}
+                    <div className="agent-config-fields">
+                      {isBuiltin ? (
+                        <>
+                          {/* Copilot: Device Flow button */}
+                          {preset.id === 'copilot-cli' && (
+                            <div className="settings-group">
+                              <label>{t('settings.copilotAuth')}</label>
+                              <CopilotDeviceFlowButton
+                                hasToken={!!config.apiKey}
+                                onTokenAcquired={async (token) => {
+                                  const encrypted = await window.electronAPI.secret.encrypt(token)
+                                  settingsStore.setAgentConfig(preset.id, { apiKey: encrypted })
+                                }}
+                              />
+                              <p className="agent-config-desc">{t('settings.copilotAuthHint')}</p>
+                            </div>
+                          )}
+                          {/* Built-in mode: API Key (hidden for copilot, replaced by device flow) */}
+                          {preset.id !== 'copilot-cli' && (
+                          <div className="settings-group">
+                            <label>{t('settings.agentApiKey')}</label>
+                            <div className="agent-config-apikey-row">
+                              <input
+                                type="password"
+                                value={config.apiKey ? '••••••••' : ''}
+                                onChange={async e => {
+                                  const val = e.target.value
+                                  if (val && val !== '••••••••') {
+                                    const encrypted = await window.electronAPI.secret.encrypt(val)
+                                    settingsStore.setAgentConfig(preset.id, { apiKey: encrypted })
+                                  }
+                                }}
+                                placeholder={preset.apiKeyEnvVar || 'API Key'}
+                              />
+                              {config.apiKey && (
+                                <button
+                                  className="agent-config-clear-btn"
+                                  onClick={() => settingsStore.setAgentConfig(preset.id, { apiKey: '' })}
+                                  title={t('settings.agentClearApiKey')}
+                                >
+                                  ✕
+                                </button>
+                              )}
+                            </div>
+                            <p className="agent-config-desc">{t('settings.agentApiKeyHint', { envVar: preset.apiKeyEnvVar || 'API_KEY' })}</p>
+                          </div>
+                          )}
+                          {/* Built-in mode: Base URL (optional) */}
+                          <div className="settings-group">
+                            <label>{t('settings.agentBaseUrl')}</label>
+                            <input
+                              type="text"
+                              value={config.builtinBaseUrl || ''}
+                              onChange={e => settingsStore.setAgentConfig(preset.id, { builtinBaseUrl: e.target.value || undefined })}
+                              placeholder={t('settings.agentBaseUrlPlaceholder')}
+                            />
+                            <p className="agent-config-desc">{t('settings.agentBaseUrlHint')}</p>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          {/* Local CLI mode: Command */}
+                          <div className="settings-group">
+                            <label>{t('settings.agentCommand')}</label>
+                            <input
+                              type="text"
+                              value={config.command || ''}
+                              onChange={e => settingsStore.setAgentConfig(preset.id, { command: e.target.value || undefined })}
+                              placeholder={preset.command}
+                              disabled={!isInstalled}
+                            />
+                            <p className="agent-config-desc">{t('settings.agentCommandDesc')}</p>
+                          </div>
+
+                          {preset.supportsArgs && (
+                            <div className="settings-group">
+                              <label>{t('settings.agentArgs')}</label>
+                              <textarea
+                                rows={2}
+                                value={(config.args || []).join('\n')}
+                                onChange={e => {
+                                  const args = e.target.value.split('\n').map(s => s.trim()).filter(Boolean)
+                                  settingsStore.setAgentConfig(preset.id, { args: args.length > 0 ? args : undefined })
+                                }}
+                                placeholder="--flag\n--option value"
+                                disabled={!isInstalled}
+                              />
+                              <p className="agent-config-desc">{t('settings.agentArgsDesc')}</p>
+                            </div>
+                          )}
+
+                          <div className="settings-group">
+                            <label>{t('settings.agentEnvVars')}</label>
+                            <textarea
+                              rows={2}
+                              value={Object.entries(config.env || {}).map(([k, v]) => `${k}=${v}`).join('\n')}
+                              onChange={e => {
+                                const env: Record<string, string> = {}
+                                e.target.value.split('\n').forEach(line => {
+                                  const idx = line.indexOf('=')
+                                  if (idx > 0) {
+                                    env[line.slice(0, idx).trim()] = line.slice(idx + 1).trim()
+                                  }
+                                })
+                                settingsStore.setAgentConfig(preset.id, { env: Object.keys(env).length > 0 ? env : undefined })
+                              }}
+                              placeholder={preset.apiKeyEnvVar ? `${preset.apiKeyEnvVar}=your_key_here` : 'KEY=VALUE'}
+                              disabled={!isInstalled}
+                            />
+                            <p className="agent-config-desc">{t('settings.agentEnvVarsDesc')}</p>
+                          </div>
+
+                          <label className="agent-config-toggle agent-config-toggle--inline">
+                            <input
+                              type="checkbox"
+                              checked={config.autoStart}
+                              disabled={!isInstalled}
+                              onChange={e => settingsStore.setAgentConfig(preset.id, { autoStart: e.target.checked })}
+                            />
+                            <span>{t('settings.agentAutoStart')}</span>
+                          </label>
+                        </>
+                      )}
+
+                      {preset.docsUrl && (
+                        <div style={{ marginTop: 4 }}>
+                          <a
+                            href={preset.docsUrl}
+                            className="agent-config-docs-link"
+                            onClick={e => { e.preventDefault(); window.electronAPI?.shell?.openExternal?.(e.currentTarget.href) }}
+                          >
+                            {t('settings.agentDocs')} ↗
+                          </a>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          {activeTab === 'general' && (
+            <>
           <div className="settings-section">
             <h3>{t('settings.environmentVariables')}</h3>
             <p className="settings-hint" style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
@@ -803,6 +1219,8 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
               )}
             </div>
           </div>
+            </>
+          )}
         </div>
 
         <div className="settings-footer">

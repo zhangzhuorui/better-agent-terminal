@@ -43,6 +43,59 @@ const electronAPI = {
     load: () => ipcRenderer.invoke('settings:load'),
     getShellPath: (shell: string) => ipcRenderer.invoke('settings:get-shell-path', shell)
   },
+  agent: {
+    checkLocalConfigs: () => ipcRenderer.invoke('agent:check-local-configs') as Promise<Record<string, { installed: boolean; envReady: boolean; missingEnvVars: string[] }>>,
+  },
+  builtinAgent: {
+    startSession: (sessionId: string, presetId: string, opts: { model?: string; systemPrompt?: string; cwd?: string }) =>
+      ipcRenderer.invoke('builtin-agent:start-session', sessionId, presetId, opts) as Promise<boolean>,
+    sendMessage: (sessionId: string, prompt: string) =>
+      ipcRenderer.invoke('builtin-agent:send-message', sessionId, prompt) as Promise<boolean>,
+    stopSession: (sessionId: string) =>
+      ipcRenderer.invoke('builtin-agent:stop-session', sessionId) as Promise<boolean>,
+    getSessionState: (sessionId: string) =>
+      ipcRenderer.invoke('builtin-agent:get-session-state', sessionId) as Promise<{ sessionId: string; presetId: string; status: 'idle' | 'thinking' | 'acting' | 'error'; messages: { id: string; role: string; content: string; timestamp: number }[]; totalInputTokens: number; totalOutputTokens: number; model: string; error?: string } | null>,
+    setModel: (sessionId: string, model: string) =>
+      ipcRenderer.invoke('builtin-agent:set-model', sessionId, model) as Promise<boolean>,
+    getModels: (presetId: string) =>
+      ipcRenderer.invoke('builtin-agent:get-models', presetId) as Promise<string[]>,
+    onMessage: (callback: (sessionId: string, msg: { id: string; role: string; content: string; timestamp: number }) => void) => {
+      const handler = (_e: Electron.IpcRendererEvent, sessionId: string, msg: { id: string; role: string; content: string; timestamp: number }) => callback(sessionId, msg)
+      ipcRenderer.on('builtin-agent:message', handler)
+      return () => ipcRenderer.removeListener('builtin-agent:message', handler)
+    },
+    onStatus: (callback: (sessionId: string, meta: { status: string; model?: string }) => void) => {
+      const handler = (_e: Electron.IpcRendererEvent, sessionId: string, meta: { status: string; model?: string }) => callback(sessionId, meta)
+      ipcRenderer.on('builtin-agent:status', handler)
+      return () => ipcRenderer.removeListener('builtin-agent:status', handler)
+    },
+    onStream: (callback: (sessionId: string, data: { delta: string; fullContent: string }) => void) => {
+      const handler = (_e: Electron.IpcRendererEvent, sessionId: string, data: { delta: string; fullContent: string }) => callback(sessionId, data)
+      ipcRenderer.on('builtin-agent:stream', handler)
+      return () => ipcRenderer.removeListener('builtin-agent:stream', handler)
+    },
+    onResult: (callback: (sessionId: string, result: { content: string; inputTokens: number; outputTokens: number }) => void) => {
+      const handler = (_e: Electron.IpcRendererEvent, sessionId: string, result: { content: string; inputTokens: number; outputTokens: number }) => callback(sessionId, result)
+      ipcRenderer.on('builtin-agent:result', handler)
+      return () => ipcRenderer.removeListener('builtin-agent:result', handler)
+    },
+    onError: (callback: (sessionId: string, error: string) => void) => {
+      const handler = (_e: Electron.IpcRendererEvent, sessionId: string, error: string) => callback(sessionId, error)
+      ipcRenderer.on('builtin-agent:error', handler)
+      return () => ipcRenderer.removeListener('builtin-agent:error', handler)
+    },
+  },
+  secret: {
+    encrypt: (plaintext: string) => ipcRenderer.invoke('secret:encrypt', plaintext) as Promise<string>,
+    decrypt: (stored: string) => ipcRenderer.invoke('secret:decrypt', stored) as Promise<string>,
+    isEncryptionAvailable: () => ipcRenderer.invoke('secret:isEncryptionAvailable') as Promise<boolean>,
+  },
+  copilotAuth: {
+    start: () => ipcRenderer.invoke('copilot-auth:start') as Promise<{ deviceCode: string; userCode: string; verificationUri: string; expiresIn: number; interval: number } | null>,
+    poll: (deviceCode: string, interval: number, expiresIn: number) =>
+      ipcRenderer.invoke('copilot-auth:poll', deviceCode, interval, expiresIn) as Promise<{ ok: boolean; accessToken?: string; error?: string }>,
+    verify: (accessToken: string) => ipcRenderer.invoke('copilot-auth:verify', accessToken) as Promise<boolean>,
+  },
   dialog: {
     selectFolder: () => ipcRenderer.invoke('dialog:select-folder'),
     selectImages: () => ipcRenderer.invoke('dialog:select-images') as Promise<string[]>,
@@ -199,6 +252,46 @@ const electronAPI = {
       ipcRenderer.on('claude:prompt-suggestion', handler)
       return () => ipcRenderer.removeListener('claude:prompt-suggestion', handler)
     },
+    onContextPlan: (callback: (sessionId: string, plan: unknown) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, sessionId: string, plan: unknown) => callback(sessionId, plan)
+      ipcRenderer.on('claude:context-plan', handler)
+      return () => ipcRenderer.removeListener('claude:context-plan', handler)
+    },
+  },
+  codex: {
+    startSession: (sessionId: string, ptyId: string) =>
+      ipcRenderer.invoke('codex:start-session', sessionId, ptyId),
+    sendMessage: (sessionId: string, prompt: string) =>
+      ipcRenderer.invoke('codex:send-message', sessionId, prompt),
+    stopSession: (sessionId: string) =>
+      ipcRenderer.invoke('codex:stop-session', sessionId),
+    getSessionState: (sessionId: string) =>
+      ipcRenderer.invoke('codex:get-session-state', sessionId) as Promise<import('./codex-agent-manager').CodexSessionState | null>,
+    onMessage: (callback: (sessionId: string, message: unknown) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, sessionId: string, message: unknown) => callback(sessionId, message)
+      ipcRenderer.on('codex:message', handler)
+      return () => ipcRenderer.removeListener('codex:message', handler)
+    },
+    onStatus: (callback: (sessionId: string, meta: unknown) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, sessionId: string, meta: unknown) => callback(sessionId, meta)
+      ipcRenderer.on('codex:status', handler)
+      return () => ipcRenderer.removeListener('codex:status', handler)
+    },
+    onToolUse: (callback: (sessionId: string, toolCall: unknown) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, sessionId: string, toolCall: unknown) => callback(sessionId, toolCall)
+      ipcRenderer.on('codex:tool-use', handler)
+      return () => ipcRenderer.removeListener('codex:tool-use', handler)
+    },
+    onToolResult: (callback: (sessionId: string, result: unknown) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, sessionId: string, result: unknown) => callback(sessionId, result)
+      ipcRenderer.on('codex:tool-result', handler)
+      return () => ipcRenderer.removeListener('codex:tool-result', handler)
+    },
+    onError: (callback: (sessionId: string, error: string) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, sessionId: string, error: string) => callback(sessionId, error)
+      ipcRenderer.on('codex:error', handler)
+      return () => ipcRenderer.removeListener('codex:error', handler)
+    },
   },
   git: {
     getGithubUrl: (folderPath: string) => ipcRenderer.invoke('git:get-github-url', folderPath) as Promise<string | null>,
@@ -283,6 +376,16 @@ const electronAPI = {
       updates: Partial<{ name: string; description?: string; content: string; tags?: string[]; workspaceRoot?: string }>
     ) => ipcRenderer.invoke('contextPackage:update', id, updates),
     delete: (id: string) => ipcRenderer.invoke('contextPackage:delete', id),
+    generateMetadata: (id: string) => ipcRenderer.invoke('contextPackage:generateMetadata', id),
+    enrichMetadata: () => ipcRenderer.invoke('contextPackage:enrichMetadata'),
+    metadataStatus: () => ipcRenderer.invoke('contextPackage:metadataStatus'),
+  },
+  contextRetrieval: {
+    recommend: (options: unknown) => ipcRenderer.invoke('contextRetrieval:recommend', options),
+    plan: (input: unknown) => ipcRenderer.invoke('contextRetrieval:plan', input),
+    cacheStats: () => ipcRenderer.invoke('contextRetrieval:cacheStats'),
+    clearCache: () => ipcRenderer.invoke('contextRetrieval:clearCache'),
+    rebuildIndex: (packageId?: string) => ipcRenderer.invoke('contextRetrieval:rebuildIndex', packageId),
   },
   analytics: {
     getSummary: () => ipcRenderer.invoke('analytics:getSummary'),
@@ -354,6 +457,24 @@ const electronAPI = {
     executions: (workflowId?: string, limit?: number) => ipcRenderer.invoke('workflow:executions', workflowId, limit),
     getExecution: (id: string) => ipcRenderer.invoke('workflow:getExecution', id),
     cancelExecution: (id: string) => ipcRenderer.invoke('workflow:cancelExecution', id),
+    validate: (workflowId: string) => ipcRenderer.invoke('workflow:validate', workflowId) as Promise<{ valid: boolean; errors: string[] }>,
+    export: (workflowId: string) => ipcRenderer.invoke('workflow:export', workflowId) as Promise<{ ok: boolean; json?: string; error?: string }>,
+    import: (json: string) => ipcRenderer.invoke('workflow:import', json) as Promise<{ ok: boolean; workflow?: unknown; error?: string }>,
+    templates: () => ipcRenderer.invoke('workflow:templates') as Promise<{ id: string; name: string; description: string; workflow: unknown }[]>,
+    onExecutionUpdate: (callback: (executionId: string, nodeId: string, state: unknown) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, executionId: string, nodeId: string, state: unknown) =>
+        callback(executionId, nodeId, state)
+      ipcRenderer.on('workflow:execution-update', handler)
+      return () => ipcRenderer.removeListener('workflow:execution-update', handler)
+    },
+    resolveHumanConfirm: (executionId: string, nodeId: string, approved: boolean) =>
+      ipcRenderer.invoke('workflow:resolveHumanConfirm', executionId, nodeId, approved),
+    onHumanConfirmRequest: (callback: (executionId: string, nodeId: string, meta: { title: string; description: string; timeoutMs: number }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, executionId: string, nodeId: string, meta: { title: string; description: string; timeoutMs: number }) =>
+        callback(executionId, nodeId, meta)
+      ipcRenderer.on('workflow:human-confirm-request', handler)
+      return () => ipcRenderer.removeListener('workflow:human-confirm-request', handler)
+    },
   },
 }
 

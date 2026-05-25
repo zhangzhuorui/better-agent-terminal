@@ -3,12 +3,16 @@ import { useTranslation } from 'react-i18next'
 import type { TerminalInstance } from '../types'
 import { TerminalPanel } from './TerminalPanel'
 import { ActivityIndicator } from './ActivityIndicator'
-import { PromptBox } from './PromptBox'
-import { getAgentPreset } from '../types/agent-presets'
+import { getAgentPreset, isSdkAgent, isCliAgent } from '../types/agent-presets'
+import { GenericAgentPanel } from './GenericAgentPanel'
+import { BuiltinAgentPanel } from './BuiltinAgentPanel'
 import { workspaceStore } from '../stores/workspace-store'
+import { settingsStore } from '../stores/settings-store'
 
-// Lazy load Claude Agent SDK (~240KB chunk) — only needed for claude-code terminals
+// Lazy load Claude Agent SDK (~240KB chunk) — only needed for sdk-type agents
 const ClaudeAgentPanel = lazy(() => import('./ClaudeAgentPanel').then(m => ({ default: m.ClaudeAgentPanel })))
+// Lazy load Codex agent panel (~15KB chunk) — only needed for codex-cli local-CLI mode
+const CodexAgentPanel = lazy(() => import('./CodexAgentPanel').then(m => ({ default: m.CodexAgentPanel })))
 
 interface MainPanelProps {
   terminal: TerminalInstance
@@ -20,13 +24,16 @@ interface MainPanelProps {
 
 export const MainPanel = memo(function MainPanel({ terminal, isActive, onClose, onRestart, workspaceId }: Readonly<MainPanelProps>) {
   const isAgent = terminal.agentPreset && terminal.agentPreset !== 'none'
-  const isClaudeCode = terminal.agentPreset === 'claude-code'
+  const isSdk = terminal.agentPreset ? isSdkAgent(terminal.agentPreset) : false
+  const isCli = terminal.agentPreset ? isCliAgent(terminal.agentPreset) : false
+  // Determine whether this CLI agent is configured to run in built-in (HTTP) mode
+  const builtinMode = isCli && terminal.agentPreset
+    ? settingsStore.getAgentConfig(terminal.agentPreset).mode === 'builtin'
+    : false
   const agentConfig = isAgent ? getAgentPreset(terminal.agentPreset!) : null
   const { t } = useTranslation()
   const [isEditing, setIsEditing] = useState(false)
   const [editValue, setEditValue] = useState(terminal.title)
-  const [showPromptBox, setShowPromptBox] = useState(false)
-
   const handleDoubleClick = () => {
     setEditValue(terminal.title)
     setIsEditing(true)
@@ -76,15 +83,6 @@ export const MainPanel = memo(function MainPanel({ terminal, isActive, onClose, 
             terminalId={terminal.id}
             size="small"
           />
-          {isAgent && !isClaudeCode && (
-            <button
-              className={`action-btn ${showPromptBox ? 'active' : ''}`}
-              onClick={() => setShowPromptBox(!showPromptBox)}
-              title={showPromptBox ? t('terminal.hidePromptBox') : t('terminal.showPromptBox')}
-            >
-              💬
-            </button>
-          )}
           <button
             className="action-btn"
             onClick={() => onRestart(terminal.id)}
@@ -102,7 +100,7 @@ export const MainPanel = memo(function MainPanel({ terminal, isActive, onClose, 
         </div>
       </div>
       <div className="main-panel-content">
-        {isClaudeCode ? (
+        {isSdk ? (
           <Suspense fallback={<div className="loading-panel" />}>
             <ClaudeAgentPanel
               sessionId={terminal.id}
@@ -111,13 +109,18 @@ export const MainPanel = memo(function MainPanel({ terminal, isActive, onClose, 
               workspaceId={workspaceId}
             />
           </Suspense>
+        ) : builtinMode && terminal.agentPreset ? (
+          <BuiltinAgentPanel terminalId={terminal.id} presetId={terminal.agentPreset} cwd={terminal.cwd} isActive={isActive} />
+        ) : terminal.agentPreset === 'codex-cli' ? (
+          <Suspense fallback={<div className="loading-panel" />}>
+            <CodexAgentPanel terminalId={terminal.id} isActive={isActive} />
+          </Suspense>
+        ) : isCli ? (
+          <GenericAgentPanel terminal={terminal} isActive={isActive} />
         ) : (
           <TerminalPanel terminalId={terminal.id} isActive={isActive} />
         )}
       </div>
-      {!isClaudeCode && showPromptBox && (
-        <PromptBox terminalId={terminal.id} />
-      )}
     </div>
   )
 })

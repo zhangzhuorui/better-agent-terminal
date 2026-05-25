@@ -75,14 +75,39 @@ async function writeExecutions(data: ExecutionsFile): Promise<void> {
   await fs.rename(tmp, p)
 }
 
+function migrateWorkflowV1ToV2(wf: WorkflowDefinition): WorkflowDefinition {
+  // Already v2 if nodes have positions
+  if (wf.nodes.every(n => n.position)) return wf
+
+  return {
+    ...wf,
+    nodes: wf.nodes.map((n, idx) => ({
+      ...n,
+      position: n.position || { x: 100 + idx * 220, y: 200 + (idx % 3) * 120 },
+      // v1 'send' nodes default to 'agent' type for v2
+      type: n.type === 'send' ? 'agent' : n.type,
+      // v1 send nodes inherit agent preset
+      agentPreset: n.type === 'send' ? 'inherit' : n.agentPreset,
+      waitForComplete: n.waitForComplete ?? true,
+      timeoutMs: n.timeoutMs || 600_000,
+    })),
+    edges: wf.edges.map((e, idx) => ({
+      ...e,
+      id: e.id || `edge-${idx}-${Date.now()}`,
+    })),
+    viewport: wf.viewport || { x: 0, y: 0, zoom: 1 },
+  }
+}
+
 export async function listWorkflows(): Promise<WorkflowDefinition[]> {
   const f = await readDefinitions()
-  return f.workflows.slice().sort((a, b) => b.updatedAt - a.updatedAt)
+  return f.workflows.map(migrateWorkflowV1ToV2).sort((a, b) => b.updatedAt - a.updatedAt)
 }
 
 export async function getWorkflow(id: string): Promise<WorkflowDefinition | null> {
   const f = await readDefinitions()
-  return f.workflows.find(w => w.id === id) ?? null
+  const wf = f.workflows.find(w => w.id === id)
+  return wf ? migrateWorkflowV1ToV2(wf) : null
 }
 
 export async function createWorkflow(input: Omit<WorkflowDefinition, 'id' | 'createdAt' | 'updatedAt'>): Promise<WorkflowDefinition> {
@@ -291,14 +316,18 @@ export class WorkflowExecutor {
   }
 
   private async saveExecution(): Promise<void> {
-    const f = await readExecutions()
-    f.executions.unshift(this.execution)
-    // Keep last 100 executions
-    if (f.executions.length > 100) {
-      f.executions = f.executions.slice(0, 100)
-    }
-    await writeExecutions(f)
+    await saveExecutionToDisk(this.execution)
   }
+}
+
+export async function saveExecutionToDisk(execution: WorkflowExecution): Promise<void> {
+  const f = await readExecutions()
+  f.executions.unshift(execution)
+  // Keep last 100 executions
+  if (f.executions.length > 100) {
+    f.executions = f.executions.slice(0, 100)
+  }
+  await writeExecutions(f)
 }
 
 export async function listExecutions(workflowId?: string, limit = 50): Promise<WorkflowExecution[]> {
@@ -321,4 +350,134 @@ export async function cancelExecution(id: string): Promise<boolean> {
   exec.status = 'cancelled'
   exec.endedAt = Date.now()
   return true
+}
+
+export async function exportWorkflow(id: string): Promise<string | null> {
+  const wf = await getWorkflow(id)
+  if (!wf) return null
+  // Strip internal fields for clean export
+  const exportable: WorkflowDefinition = {
+    ...wf,
+    nodes: wf.nodes.map(n => ({ ...n })),
+    edges: wf.edges.map(e => ({ ...e })),
+  }
+  return JSON.stringify(exportable, null, 2)
+}
+
+export async function importWorkflow(json: string): Promise<WorkflowDefinition | { error: string }> {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(json)
+  } catch {
+    return { error: 'Invalid JSON' }
+  }
+  if (!parsed || typeof parsed !== 'object') return { error: 'Invalid JSON: not an object' }
+
+  const p = parsed as Record<string, unknown>
+  if (!p.name || typeof p.name !== 'string') return { error: 'Missing workflow name' }
+  if (!Array.isArray(p.nodes)) return { error: 'Missing nodes array' }
+  if (!Array.isArray(p.edges)) return { error: 'Missing edges array' }
+
+  // Validate node types
+  const validTypes = new Set([
+    'send', 'agent', 'terminal', 'wait', 'condition', 'human',
+    'parallel', 'join', 'loop', 'start', 'end', 'mcp',
+  ])
+  for (const n of p.nodes as unknown[]) {
+    const node = n as Record<string, unknown>
+    if (!node.id || typeof node.id !== 'string') return { error: 'Node missing id' }
+    if (!node.type || !validTypes.has(node.type as string)) return { error: `Invalid node type: ${node.type}` }
+  }
+
+  const now = Date.now()
+  const input: Omit<WorkflowDefinition, 'id' | 'createdAt' | 'updatedAt'> = {
+    name: p.name as string,
+    description: typeof p.description === 'string' ? p.description : undefined,
+    enabled: typeof p.enabled === 'boolean' ? p.enabled : true,
+    trigger: (p.trigger as WorkflowDefinition['trigger']) || { type: 'manual' },
+    nodes: p.nodes as WorkflowNode[],
+    edges: p.edges as WorkflowEdge[],
+    viewport: p.viewport as WorkflowDefinition['viewport'],
+  }
+  return createWorkflow(input)
+}
+
+// ── Preset Templates ──────────────────────────────────────────────────────
+
+export function getWorkflowTemplates(): { id: string; name: string; description: string; workflow: Omit<WorkflowDefinition, 'id' | 'createdAt' | 'updatedAt'> }[] {
+  return [
+    {
+      id: 'code-review',
+      name: 'Code Review',
+      description: 'Review PR diff, check for issues, and request human confirmation.',
+      workflow: {
+        name: 'Code Review Flow',
+        enabled: true,
+        trigger: { type: 'manual' },
+        nodes: [
+          { id: 'start-1', type: 'start', position: { x: 100, y: 100 } },
+          { id: 'review', type: 'agent', label: 'Review PR', position: { x: 300, y: 100 }, prompt: 'Review the current PR diff for code quality issues, security concerns, and best practices. Summarize findings.', terminalId: 'main', agentPreset: 'inherit', waitForComplete: true, timeoutMs: 300_000 },
+          { id: 'check', type: 'condition', label: 'Review OK?', position: { x: 500, y: 100 }, condition: '{{review.status}} === "completed"' },
+          { id: 'human', type: 'human', label: 'Confirm merge', position: { x: 700, y: 50 }, confirmTitle: 'Approve Merge?', confirmDescription: 'The code review found no blockers. Approve merge?', timeoutMs: 300_000 },
+          { id: 'notify', type: 'agent', label: 'Notify issues', position: { x: 700, y: 150 }, prompt: 'Notify the team about the code review issues found.', terminalId: 'main', agentPreset: 'inherit', waitForComplete: true },
+          { id: 'end-1', type: 'end', position: { x: 900, y: 100 } },
+        ],
+        edges: [
+          { id: 'e1', from: 'start-1', to: 'review' },
+          { id: 'e2', from: 'review', to: 'check' },
+          { id: 'e3', from: 'check', to: 'human', conditionValue: 'true' },
+          { id: 'e4', from: 'check', to: 'notify', conditionValue: 'false' },
+          { id: 'e5', from: 'human', to: 'end-1' },
+          { id: 'e6', from: 'notify', to: 'end-1' },
+        ],
+      },
+    },
+    {
+      id: 'auto-test',
+      name: 'Auto Test & Fix',
+      description: 'Run tests, and if failing, invoke agent to fix them.',
+      workflow: {
+        name: 'Auto Test & Fix',
+        enabled: true,
+        trigger: { type: 'manual' },
+        nodes: [
+          { id: 'start-1', type: 'start', position: { x: 100, y: 100 } },
+          { id: 'test', type: 'terminal', label: 'Run tests', position: { x: 300, y: 100 }, command: 'npm test', terminalId: 'main', waitForComplete: true, timeoutMs: 120_000 },
+          { id: 'check', type: 'condition', label: 'Tests ran?', position: { x: 500, y: 100 }, condition: '{{test.status}} === "completed"' },
+          { id: 'fix', type: 'agent', label: 'Fix failures', position: { x: 700, y: 150 }, prompt: 'The tests failed. Analyze the test output and fix the failing tests or underlying code. Run tests again to verify.', terminalId: 'main', agentPreset: 'inherit', waitForComplete: true, timeoutMs: 600_000 },
+          { id: 'end-1', type: 'end', position: { x: 900, y: 100 } },
+        ],
+        edges: [
+          { id: 'e1', from: 'start-1', to: 'test' },
+          { id: 'e2', from: 'test', to: 'check' },
+          { id: 'e3', from: 'check', to: 'end-1', conditionValue: 'true' },
+          { id: 'e4', from: 'check', to: 'fix', conditionValue: 'false' },
+          { id: 'e5', from: 'fix', to: 'end-1' },
+        ],
+      },
+    },
+    {
+      id: 'release',
+      name: 'Release Flow',
+      description: 'Generate changelog, git tag, and publish.',
+      workflow: {
+        name: 'Release Flow',
+        enabled: true,
+        trigger: { type: 'manual' },
+        nodes: [
+          { id: 'start-1', type: 'start', position: { x: 100, y: 100 } },
+          { id: 'changelog', type: 'agent', label: 'Generate changelog', position: { x: 300, y: 100 }, prompt: 'Generate a changelog from the recent commits since the last tag. Output a concise markdown changelog.', terminalId: 'main', agentPreset: 'inherit', waitForComplete: true, timeoutMs: 300_000 },
+          { id: 'tag', type: 'terminal', label: 'Git tag', position: { x: 500, y: 100 }, command: 'git tag -a v$(node -p "require(\'./package.json\').version") -m "Release" && git push --tags', terminalId: 'main', waitForComplete: true, timeoutMs: 60_000 },
+          { id: 'publish', type: 'terminal', label: 'Publish', position: { x: 700, y: 100 }, command: 'npm publish', terminalId: 'main', waitForComplete: true, timeoutMs: 120_000 },
+          { id: 'end-1', type: 'end', position: { x: 900, y: 100 } },
+        ],
+        edges: [
+          { id: 'e1', from: 'start-1', to: 'changelog' },
+          { id: 'e2', from: 'changelog', to: 'tag' },
+          { id: 'e3', from: 'tag', to: 'publish' },
+          { id: 'e4', from: 'publish', to: 'end-1' },
+        ],
+      },
+    },
+  ]
 }

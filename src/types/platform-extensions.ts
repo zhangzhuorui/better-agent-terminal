@@ -1,7 +1,35 @@
+import type { AgentPresetId } from './agent-presets'
+
 export interface ContextPackageVersion {
   version: number
   content: string
   updatedAt: number
+}
+
+export interface ContextPackageMetadata {
+  summary?: string
+  shortSummary?: string
+  autoTags?: string[]
+  keywords?: string[]
+  language?: string
+  framework?: string
+  relatedFiles?: string[]
+  contentHash?: string
+  tokenEstimate?: number
+  metadataVersion?: number
+  generatedAt?: number
+}
+
+export interface ContextPackageChunk {
+  id: string
+  packageId: string
+  content: string
+  summary?: string
+  keywords?: string[]
+  tokenEstimate: number
+  startOffset: number
+  endOffset: number
+  hash: string
 }
 
 /** Reusable context injected into Claude user turns (main process resolves content). */
@@ -17,6 +45,66 @@ export interface ContextPackage {
   updatedAt: number
   /** Version history for rollback and comparison. */
   versions?: ContextPackageVersion[]
+  metadata?: ContextPackageMetadata
+  chunks?: ContextPackageChunk[]
+  compressed?: {
+    brief?: string
+    medium?: string
+    detailed?: string
+    updatedAt: number
+  }
+}
+
+export type ResolvedContextSource = 'explicit' | 'rule' | 'auto'
+export type ContextCompressionMode = 'none' | 'summary' | 'extractive'
+
+export interface ContextRecommendation {
+  packageId: string
+  name: string
+  score: number
+  reasons: string[]
+  tokenEstimate?: number
+  summary?: string
+  tags?: string[]
+  workspaceRoot?: string
+  source?: 'context-package' | 'local-file'
+}
+
+export interface ContextRetrievalOptions {
+  prompt: string
+  workspacePath?: string
+  agentPreset?: AgentPresetId
+  excludePackageIds?: string[]
+  limit?: number
+  minScore?: number
+  includeLocalFiles?: boolean
+}
+
+export interface ContextInjectionPlan {
+  mode: 'off' | 'recommend' | 'inject'
+  explicitPackageIds: string[]
+  rulePackageIds: string[]
+  recommendedPackageIds: string[]
+  finalPackageIds: string[]
+  recommendations: ContextRecommendation[]
+  tokenBudget: number
+  estimatedTokens: number
+  cacheHit?: boolean
+  compressed?: boolean
+}
+
+export interface ResolvedContextBlock {
+  id: string
+  packageId: string
+  title: string
+  source: ResolvedContextSource
+  content: string
+  summary?: string
+  tags?: string[]
+  compression: ContextCompressionMode
+  score?: number
+  tokenEstimate: number
+  contentHash?: string
 }
 
 export interface DailyAnalyticsModelBreakdown {
@@ -131,6 +219,8 @@ export interface WorkflowTrigger {
   type: WorkflowTriggerType
   /** For schedule: cron expression or HH:mm */
   schedule?: string
+  /** For schedule: 0–6 Sun–Sat; empty or omit = every day */
+  weekdays?: number[]
   /** For git_commit: branch pattern regex */
   branchPattern?: string
   /** For file_change: glob patterns to watch */
@@ -139,21 +229,52 @@ export interface WorkflowTrigger {
   webhookSecret?: string
 }
 
-export type WorkflowNodeType = ‘send’ | ‘wait’ | ‘condition’ | ‘human’ | ‘parallel’ | ‘loop’
+/** V2 node types — ‘send’ is deprecated, use ‘agent’ or ‘terminal’ */
+export type WorkflowNodeType =
+  | ‘send’        // v1 legacy
+  | ‘agent’       // send prompt to an agent and wait for completion
+  | ‘terminal’    // send command to a terminal
+  | ‘wait’        // wait for duration or event
+  | ‘condition’   // conditional branch
+  | ‘human’       // human approval
+  | ‘parallel’    // parallel gateway (fork)
+  | ‘join’        // join gateway (sync)
+  | ‘loop’        // loop/repeat
+  | ‘start’       // visual start node
+  | ‘end’         // visual end node
+  | ‘mcp’         // MCP tool call
+
+export interface WorkflowNodePosition {
+  x: number
+  y: number
+}
+
+export type WorkflowAgentPreset = string | ‘inherit’
 
 export interface WorkflowNode {
   id: string
   type: WorkflowNodeType
   /** Human-readable label */
   label?: string
-  /** For ‘send’: target terminal and prompt */
+  /** Canvas position (V2) */
+  position?: WorkflowNodePosition
+  /** For ‘agent’/’send’/’terminal’: target terminal */
   terminalId?: string
+  /** For ‘agent’/’send’: prompt text */
   prompt?: string
   contextPackageIds?: string[]
   permissionMode?: AutomationPermissionMode
+  /** For ‘agent’: which agent preset to use (‘inherit’ = use terminal’s preset) */
+  agentPreset?: WorkflowAgentPreset
+  /** For ‘agent’: override default model */
+  model?: string
+  /** For ‘agent’: override effort setting */
+  effort?: string
+  /** For ‘agent’: wait for agent to finish (default true) */
+  waitForComplete?: boolean
   /** For ‘wait’: duration in ms or event name */
   durationMs?: number
-  waitForEvent?: ‘agent_complete’ | ‘file_change’
+  waitForEvent?: ‘agent_complete’ | ‘file_change’ | ‘user_input’
   /** For ‘condition’: simple expression like ‘{{prev.status}} === "success"’ */
   condition?: string
   /** For ‘human’: confirmation dialog text */
@@ -166,13 +287,27 @@ export interface WorkflowNode {
   loopNodeId?: string
   loopCount?: number
   loopUntil?: string
+  /** For ‘terminal’: shell command to execute */
+  command?: string
+  /** For ‘mcp’: MCP server and tool config */
+  mcpServerId?: string
+  mcpToolName?: string
+  mcpToolInput?: Record<string, unknown>
+  /** Retry strategy: how many times to retry on failure (default 0) */
+  retryCount?: number
+  /** Delay between retries in ms (default 5000) */
+  retryDelayMs?: number
 }
 
 export interface WorkflowEdge {
+  /** Edge ID — auto-generated if missing (backward compat) */
+  id?: string
   from: string
   to: string
   /** Optional condition label for the edge */
   label?: string
+  /** For conditional branches: value that must match to traverse this edge */
+  conditionValue?: string
 }
 
 export interface WorkflowDefinition {
@@ -183,18 +318,48 @@ export interface WorkflowDefinition {
   trigger: WorkflowTrigger
   nodes: WorkflowNode[]
   edges: WorkflowEdge[]
+  /** Canvas viewport state (V2) */
+  viewport?: { x: number; y: number; zoom: number }
   createdAt: number
   updatedAt: number
 }
 
 export type WorkflowExecutionStatus = ‘pending’ | ‘running’ | ‘paused’ | ‘completed’ | ‘failed’ | ‘cancelled’
 
+export type WorkflowNodeExecutionStatus =
+  | ‘pending’
+  | ‘queued’
+  | ‘running’
+  | ‘waiting_agent’
+  | ‘waiting_human’
+  | ‘waiting_event’
+  | ‘completed’
+  | ‘failed’
+  | ‘skipped’
+  | ‘timeout’
+  | ‘cancelled’
+
+export interface WorkflowNodeToolCall {
+  id: string
+  name: string
+  status: ‘running’ | ‘completed’ | ‘failed’
+  startedAt: number
+  endedAt?: number
+}
+
 export interface WorkflowNodeState {
-  status: WorkflowExecutionStatus
+  status: WorkflowNodeExecutionStatus
   output?: string
   startedAt?: number
   endedAt?: number
   error?: string
+  /** Agent execution details */
+  agentTurns?: number
+  agentTokensIn?: number
+  agentTokensOut?: number
+  agentCostUsd?: number
+  /** Tool call tracking */
+  toolCalls?: WorkflowNodeToolCall[]
 }
 
 export interface WorkflowExecution {
@@ -202,9 +367,13 @@ export interface WorkflowExecution {
   workflowId: string
   status: WorkflowExecutionStatus
   nodeStates: Record<string, WorkflowNodeState>
+  /** Currently executing node IDs (supports parallel) */
+  currentNodeIds?: string[]
   startedAt: number
   endedAt?: number
   error?: string
+  /** External context injected by triggers (e.g. webhook body) */
+  context?: Record<string, unknown>
 }
 
 // ============================================

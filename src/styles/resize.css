@@ -139,6 +139,8 @@
   min-width: 160px;
   z-index: 100;
   padding: 4px 0;
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
 }
 
 .thumbnail-add-menu-item {

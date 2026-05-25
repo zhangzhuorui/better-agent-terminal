@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TerminalInstance } from '../types'
 import { TerminalThumbnail } from './TerminalThumbnail'
-import { getAgentPreset } from '../types/agent-presets'
+import { getAgentPreset, AGENT_PRESETS, type AgentPresetId } from '../types/agent-presets'
 
 interface ThumbnailBarProps {
   terminals: TerminalInstance[]
@@ -10,6 +10,9 @@ interface ThumbnailBarProps {
   onFocus: (id: string) => void
   onAddTerminal?: () => void
   onAddClaudeAgent?: () => void
+  onAddCodexAgent?: () => void
+  onAddGeminiAgent?: () => void
+  onAddCopilotAgent?: () => void
   onReorder?: (orderedIds: string[]) => void
   showAddButton: boolean
   height?: number
@@ -23,6 +26,9 @@ export function ThumbnailBar({
   onFocus,
   onAddTerminal,
   onAddClaudeAgent,
+  onAddCodexAgent,
+  onAddGeminiAgent,
+  onAddCopilotAgent,
   onReorder,
   showAddButton,
   height,
@@ -161,15 +167,27 @@ export function ThumbnailBar({
                     <span className="thumbnail-add-menu-icon">⌘</span>
                     {t('terminal.terminalLabel')}
                   </div>
-                  {onAddClaudeAgent && (
-                    <div
-                      className="thumbnail-add-menu-item"
-                      onClick={() => { onAddClaudeAgent(); setShowAddMenu(false) }}
-                    >
-                      <span className="thumbnail-add-menu-icon" style={{ color: '#d97706' }}>✦</span>
-                      Claude Code
-                    </div>
-                  )}
+                  {AGENT_PRESETS.filter(p => p.id !== 'none').map(preset => {
+                    const handlerMap: Record<AgentPresetId, (() => void) | undefined> = {
+                      'claude-code': onAddClaudeAgent,
+                      'codex-cli': onAddCodexAgent,
+                      'gemini-cli': onAddGeminiAgent,
+                      'copilot-cli': onAddCopilotAgent,
+                      'none': undefined,
+                    }
+                    const handler = handlerMap[preset.id as AgentPresetId]
+                    if (!handler) return null
+                    return (
+                      <div
+                        key={preset.id}
+                        className="thumbnail-add-menu-item"
+                        onClick={() => { handler(); setShowAddMenu(false) }}
+                      >
+                        <span className="thumbnail-add-menu-icon" style={{ color: preset.color }}>{preset.icon}</span>
+                        {preset.name}
+                      </div>
+                    )
+                  })}
                 </div>
               )}
             </div>

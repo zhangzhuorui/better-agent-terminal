@@ -50,6 +50,12 @@ if (process.platform === 'darwin') {
 }
 import { PtyManager } from './pty-manager'
 import { ClaudeAgentManager } from './claude-agent-manager'
+import { CodexAgentManager } from './codex-agent-manager'
+import { BuiltinAgentManager } from './builtin-agent-manager'
+import { encryptSecret, decryptSecret, isEncryptionAvailable } from './secret-store'
+import { startDeviceFlow, pollForAccessToken, verifyAccessToken } from './copilot-auth'
+import { AgentDispatcher } from './agent-dispatcher'
+import * as workflowExecutorV2 from './workflow-executor-v2'
 import { checkForUpdates, UpdateCheckResult } from './update-checker'
 import { snippetDb, CreateSnippetInput } from './snippet-db'
 import { ProfileManager } from './profile-manager'
@@ -61,7 +67,11 @@ import { RemoteClient } from './remote/remote-client'
 import { getConnectionInfo } from './remote/tunnel-manager'
 import { logger } from './logger'
 import { AutomationScheduler } from './automation-scheduler'
+import { WorkflowTriggerScheduler } from './workflow-trigger-scheduler'
 import * as contextPackageStore from './context-package-store'
+import * as contextRetrievalService from './context-retrieval-service'
+import * as contextCache from './context-cache'
+import * as contextPackageIndex from './context-package-index'
 import * as analyticsStore from './analytics-store'
 import { listAutomationJobs, saveAutomationJobs } from './automation-jobs'
 import { runCodeburnReport, isCodeburnAvailable } from './codeburn-bridge'
@@ -106,12 +116,30 @@ if (process.platform === 'win32') {
 let mainWindow: BrowserWindow | null = null
 let ptyManager: PtyManager | null = null
 let claudeManager: ClaudeAgentManager | null = null
+let codexManager: CodexAgentManager | null = null
+let builtinAgentManager: BuiltinAgentManager | null = null
+let agentDispatcher: AgentDispatcher | null = null
 let automationScheduler: AutomationScheduler | null = null
+let workflowTriggerScheduler: WorkflowTriggerScheduler | null = null
 let updateCheckResult: UpdateCheckResult | null = null
 const profileManager = new ProfileManager()
 const remoteServer = new RemoteServer()
 let remoteClient: RemoteClient | null = null
 const detachedWindows = new Map<string, BrowserWindow>() // workspaceId → BrowserWindow
+
+/** Broadcast to all renderer windows and the broadcast hub */
+function broadcastToRenderers(channel: string, ...args: unknown[]) {
+  for (const win of getAllWindows()) {
+    if (!win.isDestroyed()) {
+      try {
+        win.webContents.send(channel, ...args)
+      } catch {
+        // Render frame may be disposed during window reload/close
+      }
+    }
+  }
+  broadcastHub.broadcast(channel, ...args)
+}
 
 /** Attach a will-resize throttle to a BrowserWindow to reduce DWM pressure on Windows. */
 function setupResizeThrottle(win: BrowserWindow, label: string) {
@@ -256,8 +284,34 @@ function createWindow() {
 
   ptyManager = new PtyManager(getAllWindows)
   claudeManager = new ClaudeAgentManager(getAllWindows)
+  codexManager = new CodexAgentManager(getAllWindows)
+  builtinAgentManager = new BuiltinAgentManager(
+    getAllWindows,
+    (presetId) => {
+      // Read encrypted API key from settings
+      const raw = fsSync.readFileSync(path.join(app.getPath('userData'), 'settings.json'), 'utf-8')
+      const settings = JSON.parse(raw)
+      return settings?.agentConfigs?.[presetId]?.apiKey || ''
+    },
+    (presetId) => {
+      try {
+        const raw = fsSync.readFileSync(path.join(app.getPath('userData'), 'settings.json'), 'utf-8')
+        const settings = JSON.parse(raw)
+        return settings?.agentConfigs?.[presetId]?.builtinBaseUrl || undefined
+      } catch { return undefined }
+    },
+  )
+  agentDispatcher = new AgentDispatcher(claudeManager, ptyManager, builtinAgentManager)
   automationScheduler = new AutomationScheduler(() => claudeManager)
   automationScheduler.start()
+  workflowTriggerScheduler = new WorkflowTriggerScheduler()
+  workflowTriggerScheduler.setDependencies(agentDispatcher, broadcastToRenderers)
+  workflowTriggerScheduler.start()
+
+  // Wire PTY output to Codex agent manager for CLI parsing
+  ptyManager.onAnyData((id, data) => {
+    codexManager?.onPtyOutputByPtyId(id, data)
+  })
 
   if (VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(VITE_DEV_SERVER_URL)
@@ -282,12 +336,18 @@ function cleanupAllProcesses() {
   try { remoteClient?.disconnect() } catch { /* ignore */ }
   try { remoteServer.stop() } catch { /* ignore */ }
   try { automationScheduler?.stop() } catch { /* ignore */ }
+  try { workflowTriggerScheduler?.stop() } catch { /* ignore */ }
   try { claudeManager?.killAll() } catch { /* ignore */ }
   try { claudeManager?.dispose() } catch { /* ignore */ }
+  try { codexManager?.dispose() } catch { /* ignore */ }
+  try { builtinAgentManager?.dispose() } catch { /* ignore */ }
   try { ptyManager?.dispose() } catch { /* ignore */ }
   remoteClient = null
   automationScheduler = null
+  workflowTriggerScheduler = null
   claudeManager = null
+  codexManager = null
+  builtinAgentManager = null
   ptyManager = null
 }
 
@@ -383,7 +443,14 @@ function registerProxiedHandlers() {
   const MESSAGE_ARCHIVE_DIR = path.join(app.getPath('userData'), 'message-archives')
 
   // PTY
-  registerHandler('pty:create', (options: unknown) => ptyManager?.create(options as import('../src/types').CreatePtyOptions))
+  registerHandler('pty:create', (options: unknown) => {
+    const opts = options as import('../src/types').CreatePtyOptions
+    const ok = ptyManager?.create(opts)
+    if (ok && opts.agentPreset === 'codex-cli') {
+      codexManager?.registerSession(opts.id, opts.id)
+    }
+    return ok
+  })
   registerHandler('pty:write', (id: string, data: string) => ptyManager?.write(id, data))
   registerHandler('pty:resize', (id: string, cols: number, rows: number) => {
     logger.log(`[resize] pty:resize id=${id} cols=${cols} rows=${rows}`)
@@ -459,6 +526,49 @@ function registerProxiedHandlers() {
 
   // Claude Agent SDK
   registerHandler('claude:start-session', (sessionId: string, options: { cwd: string; prompt?: string; permissionMode?: string; model?: string }) => claudeManager?.startSession(sessionId, options))
+
+  // Codex Agent (PTY-based CLI parsing)
+  registerHandler('codex:start-session', (sessionId: string, ptyId: string) => {
+    codexManager?.registerSession(sessionId, ptyId)
+    return true
+  })
+  registerHandler('codex:send-message', (sessionId: string, prompt: string) => codexManager?.sendMessage(sessionId, prompt) ?? false)
+  registerHandler('codex:stop-session', (sessionId: string) => codexManager?.stopSession(sessionId) ?? false)
+  registerHandler('codex:get-session-state', (sessionId: string) => codexManager?.getSessionState(sessionId) ?? null)
+
+  // ── Built-in agent (OpenAI / Gemini / Copilot via in-process HTTP) ──
+  registerHandler('builtin-agent:start-session', (sessionId: string, presetId: string, opts: { model?: string; systemPrompt?: string; cwd?: string }) => {
+    builtinAgentManager?.startSession(sessionId, presetId as never, opts || {})
+    return true
+  })
+  registerHandler('builtin-agent:send-message', async (sessionId: string, prompt: string) => {
+    return (await builtinAgentManager?.sendMessage(sessionId, prompt)) ?? false
+  })
+  registerHandler('builtin-agent:stop-session', (sessionId: string) => {
+    builtinAgentManager?.stopSession(sessionId)
+    return true
+  })
+  registerHandler('builtin-agent:get-session-state', (sessionId: string) => {
+    return builtinAgentManager?.getSessionState(sessionId) ?? null
+  })
+  registerHandler('builtin-agent:set-model', (sessionId: string, model: string) => {
+    builtinAgentManager?.setModel(sessionId, model)
+    return true
+  })
+  registerHandler('builtin-agent:get-models', (presetId: string) => {
+    return builtinAgentManager?.getAvailableModels(presetId) ?? []
+  })
+
+  // ── Secret store: encrypt/decrypt API keys with safeStorage ──
+  registerHandler('secret:encrypt', (plaintext: string) => encryptSecret(plaintext))
+  registerHandler('secret:decrypt', (stored: string) => decryptSecret(stored))
+  registerHandler('secret:isEncryptionAvailable', () => isEncryptionAvailable())
+
+  // ── Copilot Device Flow OAuth ──
+  registerHandler('copilot-auth:start', () => startDeviceFlow())
+  registerHandler('copilot-auth:poll', (deviceCode: string, interval: number, expiresIn: number) =>
+    pollForAccessToken(deviceCode, interval, expiresIn))
+  registerHandler('copilot-auth:verify', (accessToken: string) => verifyAccessToken(accessToken))
   registerHandler(
     'claude:send-message',
     (
@@ -930,6 +1040,14 @@ function registerProxiedHandlers() {
     ) => contextPackageStore.updateContextPackage(id, updates)
   )
   registerHandler('contextPackage:delete', (id: string) => contextPackageStore.deleteContextPackage(id))
+  registerHandler('contextPackage:generateMetadata', (id: string) => contextPackageStore.generateMetadataForPackage(id))
+  registerHandler('contextPackage:enrichMetadata', () => contextPackageStore.enrichAllContextPackageMetadata())
+  registerHandler('contextPackage:metadataStatus', () => contextPackageStore.getContextPackageMetadataStatus())
+  registerHandler('contextRetrieval:recommend', (options: unknown) => contextRetrievalService.recommendContextPackages(options as any))
+  registerHandler('contextRetrieval:plan', (input: unknown) => contextRetrievalService.buildContextInjectionPlan(input as any))
+  registerHandler('contextRetrieval:cacheStats', () => contextCache.getContextCacheStats())
+  registerHandler('contextRetrieval:clearCache', () => { contextCache.clearContextCaches(); return true })
+  registerHandler('contextRetrieval:rebuildIndex', (packageId?: string) => contextPackageIndex.rebuildContextPackageIndex(packageId))
 
   // Content search (messages + context packages)
   registerHandler('contentSearch:session-messages', (sessionId: string, query: string) =>
@@ -1004,24 +1122,129 @@ function registerProxiedHandlers() {
   registerHandler('workflow:execute', async (workflowId: string) => {
     const wf = await workflowEngine.getWorkflow(workflowId)
     if (!wf) return { ok: false, error: 'Workflow not found' }
-    const executor = new workflowEngine.WorkflowExecutor(wf, async (terminalId, prompt) => {
-      // Send message via Claude Agent Manager if session exists, otherwise return false
-      const sessionId = terminalId
-      if (!claudeManager) return false
-      try {
-        return await claudeManager.sendMessage(sessionId, prompt)
-      } catch {
-        return false
-      }
-    })
-    executor.start().catch((err: unknown) => {
-      logger.error('[workflow] execution error:', err)
-    })
-    return { ok: true, executionId: executor.getExecution().id }
+    if (!agentDispatcher) return { ok: false, error: 'Agent dispatcher not ready' }
+    try {
+      const result = await workflowExecutorV2.runWorkflowV2(wf, agentDispatcher, broadcastToRenderers)
+      return { ok: true, executionId: result.id }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      logger.error('[workflow-v2] execution error:', msg)
+      return { ok: false, error: msg }
+    }
   })
   registerHandler('workflow:executions', (workflowId?: string, limit?: number) => workflowEngine.listExecutions(workflowId, limit))
   registerHandler('workflow:getExecution', (id: string) => workflowEngine.getExecution(id))
-  registerHandler('workflow:cancelExecution', (id: string) => workflowEngine.cancelExecution(id))
+  registerHandler('workflow:cancelExecution', (id: string) => workflowExecutorV2.cancelWorkflowExecution(id))
+  registerHandler('workflow:resolveHumanConfirm', (executionId: string, nodeId: string, approved: boolean) => {
+    workflowExecutorV2.resolveHumanConfirm(executionId, nodeId, approved)
+    return true
+  })
+  registerHandler('workflow:validate', async (workflowId: string) => {
+    const wf = await workflowEngine.getWorkflow(workflowId)
+    if (!wf) return { valid: false, errors: ['Workflow not found'] }
+    const errors: string[] = []
+    // Check for duplicate node IDs
+    const nodeIds = new Set<string>()
+    for (const node of wf.nodes) {
+      if (nodeIds.has(node.id)) errors.push(`Duplicate node ID: ${node.id}`)
+      nodeIds.add(node.id)
+    }
+    // Check edges reference valid nodes
+    for (const edge of wf.edges) {
+      if (!nodeIds.has(edge.from)) errors.push(`Edge references unknown node: ${edge.from}`)
+      if (!nodeIds.has(edge.to)) errors.push(`Edge references unknown node: ${edge.to}`)
+    }
+    // Check for cycles (simple DFS)
+    const adj = new Map<string, string[]>()
+    for (const edge of wf.edges) {
+      const list = adj.get(edge.from) || []
+      list.push(edge.to)
+      adj.set(edge.from, list)
+    }
+    const visited = new Set<string>()
+    const recStack = new Set<string>()
+    function hasCycle(nodeId: string): boolean {
+      visited.add(nodeId)
+      recStack.add(nodeId)
+      for (const next of adj.get(nodeId) || []) {
+        if (!visited.has(next) && hasCycle(next)) return true
+        if (recStack.has(next)) return true
+      }
+      recStack.delete(nodeId)
+      return false
+    }
+    for (const node of wf.nodes) {
+      if (!visited.has(node.id) && hasCycle(node.id)) {
+        errors.push('Workflow contains a cycle')
+        break
+      }
+    }
+    return { valid: errors.length === 0, errors }
+  })
+  registerHandler('workflow:export', async (workflowId: string) => {
+    const json = await workflowEngine.exportWorkflow(workflowId)
+    return json ? { ok: true, json } : { ok: false, error: 'Workflow not found' }
+  })
+  registerHandler('workflow:import', async (json: string) => {
+    const result = await workflowEngine.importWorkflow(json)
+    if ('error' in result) return { ok: false, error: result.error }
+    return { ok: true, workflow: result }
+  })
+  registerHandler('workflow:templates', () => workflowEngine.getWorkflowTemplates())
+
+  // Agent local config detection
+  function commandExists(cmd: string): boolean {
+    try {
+      if (process.platform === 'win32') {
+        execFileSync('where', [cmd], { stdio: 'ignore', timeout: 3000 })
+      } else {
+        execFileSync('which', [cmd], { stdio: 'ignore', timeout: 3000 })
+      }
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  registerHandler('agent:check-local-configs', () => {
+    const configs: Record<string, { installed: boolean; envReady: boolean; missingEnvVars: string[] }> = {}
+
+    // codex-cli
+    const codexInstalled = commandExists('codex')
+    const openaiKey = !!process.env.OPENAI_API_KEY
+    configs['codex-cli'] = {
+      installed: codexInstalled,
+      envReady: openaiKey,
+      missingEnvVars: openaiKey ? [] : ['OPENAI_API_KEY'],
+    }
+
+    // gemini-cli
+    const geminiInstalled = commandExists('gemini')
+    const googleKey = !!process.env.GOOGLE_API_KEY
+    configs['gemini-cli'] = {
+      installed: geminiInstalled,
+      envReady: googleKey,
+      missingEnvVars: googleKey ? [] : ['GOOGLE_API_KEY'],
+    }
+
+    // copilot-cli (gh CLI + copilot extension)
+    const ghInstalled = commandExists('gh')
+    configs['copilot-cli'] = {
+      installed: ghInstalled,
+      envReady: true,
+      missingEnvVars: [],
+    }
+
+    // claude-code
+    const claudeInstalled = commandExists('claude')
+    configs['claude-code'] = {
+      installed: claudeInstalled,
+      envReady: true,
+      missingEnvVars: [],
+    }
+
+    return configs
+  })
 
   // Git enhanced
   registerHandler('git:stash', async (cwd: string) => {

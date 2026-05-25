@@ -4,11 +4,14 @@ import * as fsSync from 'fs'
 import * as fsPromises from 'fs/promises'
 import * as pathModule from 'path'
 import type { ClaudeMessage, ClaudeToolCall, ClaudeSessionState } from '../src/types/claude-agent'
+import type { ContextModuleSettings } from '../src/types'
 import type { Query, PermissionMode, CanUseTool, SlashCommand } from '@anthropic-ai/claude-agent-sdk'
 import { logger } from './logger'
 import { getNodeExecutable, isElectronFallback } from './node-resolver'
 import * as analyticsStore from './analytics-store'
-import { formatContextPackagesForPrompt, getContextPackagesByIds } from './context-package-store'
+import { formatResolvedContextForPrompt, getContextPackagesByIds } from './context-package-store'
+import { buildContextInjectionPlan } from './context-retrieval-service'
+import { compressContextBlocks } from './context-compression-engine'
 import * as injectionEngine from './injection-engine'
 import * as traceStore from './trace-store'
 import * as auditEngine from './audit-engine'
@@ -22,6 +25,29 @@ import { broadcastHub } from './remote/broadcast-hub'
 let queryFn: typeof import('@anthropic-ai/claude-agent-sdk').query | null = null
 let listSessionsFn: typeof import('@anthropic-ai/claude-agent-sdk').listSessions | null = null
 let getSessionMessagesFn: typeof import('@anthropic-ai/claude-agent-sdk').getSessionMessages | null = null
+
+function defaultContextModuleSettings(): ContextModuleSettings {
+  return {
+    autoRetrievalMode: 'recommend',
+    autoInjectMaxPackages: 3,
+    autoInjectMinScore: 0.72,
+    contextTokenBudget: 12000,
+    compressionEnabled: true,
+    summarizeOnSave: true,
+    cacheEnabled: true,
+    includeLocalFiles: false,
+  }
+}
+
+async function loadContextModuleSettings(): Promise<ContextModuleSettings> {
+  try {
+    const raw = await fsPromises.readFile(pathModule.join(app.getPath('userData'), 'settings.json'), 'utf-8')
+    const parsed = JSON.parse(raw) as { contextModule?: Partial<ContextModuleSettings> }
+    return { ...defaultContextModuleSettings(), ...parsed.contextModule }
+  } catch {
+    return defaultContextModuleSettings()
+  }
+}
 
 async function getQuery() {
   if (!queryFn) {
@@ -356,7 +382,8 @@ export class ClaudeAgentManager {
       .recordUserMessage(options?.analyticsSource === 'automation' ? 'automation' : 'user')
       .catch(e => logger.warn('[analytics] recordUserMessage', e))
 
-    let pkgIds = options?.contextPackageIds?.filter(Boolean) ?? []
+    const explicitPackageIds = [...new Set(options?.contextPackageIds?.filter(Boolean) ?? [])]
+    let rulePackageIds: string[] = []
 
     // Evaluate auto-injection rules
     try {
@@ -364,20 +391,62 @@ export class ClaudeAgentManager {
         workspacePath: session.cwd || '',
         agentPreset: (session as any).agentPreset,
         messageText: prompt,
-        existingPackageIds: pkgIds,
+        existingPackageIds: explicitPackageIds,
       })
       if (injectionResult.matchedRuleIds.length > 0) {
-        pkgIds = injectionResult.mergedPackageIds
+        rulePackageIds = injectionResult.mergedPackageIds.filter(id => !explicitPackageIds.includes(id))
         logger.log(`[injection] applied rules: ${injectionResult.appliedRules.join(', ')}`)
       }
     } catch (e) {
       logger.log(`[injection] evaluation error: ${e}`)
     }
 
-    const packages = pkgIds.length > 0 ? await getContextPackagesByIds(pkgIds) : []
-    const queryPrompt = packages.length > 0 ? formatContextPackagesForPrompt(packages, prompt) : prompt
-    const pkgNote =
-      packages.length > 0 ? `\n[附加上下文包: ${packages.map(p => p.name).join(', ')}]` : ''
+    const settings = await loadContextModuleSettings()
+    const workflowSettings = options?.analyticsSource === 'automation'
+      ? { ...settings, autoRetrievalMode: 'off' as const }
+      : settings
+    const plan = await buildContextInjectionPlan({
+      prompt,
+      workspacePath: session.cwd || '',
+      agentPreset: (session as any).agentPreset,
+      explicitPackageIds,
+      rulePackageIds,
+      settings: workflowSettings,
+    })
+    const packages = plan.finalPackageIds.length > 0 ? await getContextPackagesByIds(plan.finalPackageIds) : []
+    const resolvedBlocks = workflowSettings.compressionEnabled
+      ? compressContextBlocks({
+        packages,
+        query: prompt,
+        explicitPackageIds,
+        tokenBudget: workflowSettings.contextTokenBudget,
+        recommendations: plan.recommendations,
+      })
+      : packages.map(pkg => ({
+        id: `${pkg.id}:full`,
+        packageId: pkg.id,
+        title: pkg.name,
+        source: explicitPackageIds.includes(pkg.id) ? 'explicit' as const : rulePackageIds.includes(pkg.id) ? 'rule' as const : 'auto' as const,
+        content: pkg.content,
+        summary: pkg.metadata?.shortSummary ?? pkg.metadata?.summary,
+        tags: [...(pkg.tags ?? []), ...(pkg.metadata?.autoTags ?? [])],
+        compression: 'none' as const,
+        score: plan.recommendations.find(r => r.packageId === pkg.id)?.score,
+        tokenEstimate: pkg.metadata?.tokenEstimate ?? Math.ceil(pkg.content.length / 4),
+        contentHash: pkg.metadata?.contentHash,
+      }))
+    plan.estimatedTokens = resolvedBlocks.reduce((sum, block) => sum + block.tokenEstimate, 0)
+    plan.compressed = resolvedBlocks.some(block => block.compression !== 'none')
+    this.send('claude:context-plan', sessionId, plan)
+    const queryPrompt = resolvedBlocks.length > 0 ? formatResolvedContextForPrompt(resolvedBlocks, prompt, plan) : prompt
+    const pkgNoteParts = [
+      explicitPackageIds.length ? `手动上下文包 ${explicitPackageIds.length}` : '',
+      rulePackageIds.length ? `规则注入包 ${rulePackageIds.length}` : '',
+      plan.recommendedPackageIds.length ? `自动注入包 ${plan.recommendedPackageIds.length}` : '',
+      plan.mode === 'recommend' && plan.recommendations.length ? `推荐 ${plan.recommendations.length}` : '',
+      plan.compressed ? `已压缩，约 ${plan.estimatedTokens} tokens` : resolvedBlocks.length ? `约 ${plan.estimatedTokens} tokens` : '',
+    ].filter(Boolean)
+    const pkgNote = pkgNoteParts.length > 0 ? `\n[上下文: ${pkgNoteParts.join('；')}]` : ''
 
     if (session.state.isStreaming) {
       // Abort current query and immediately send the new message
@@ -390,8 +459,7 @@ export class ClaudeAgentManager {
       const contextualPrompt = abortedPrompt && abortedPrompt !== prompt
         ? `[使用者先前的訊息（已中斷）: "${abortedPrompt}"]\n\n${prompt}`
         : prompt
-      const queuedQuery =
-        packages.length > 0 ? formatContextPackagesForPrompt(packages, contextualPrompt) : contextualPrompt
+      const queuedQuery = resolvedBlocks.length > 0 ? formatResolvedContextForPrompt(resolvedBlocks, contextualPrompt, plan) : contextualPrompt
       session.messageQueue.push({ prompt: queuedQuery, images })
       return true
     }

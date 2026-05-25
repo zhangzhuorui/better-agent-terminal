@@ -16,6 +16,8 @@
   --accent-hover: #1084d8;
   --claude-accent: #d97706;
   --danger-color: #f44336;
+  --warning-color: #e8a838;
+  --success-color: #4ec9b0;
 
   /* Glass effect variables */
   --glass-bg: rgba(31, 29, 26, 0.85);

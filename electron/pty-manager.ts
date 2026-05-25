@@ -1,5 +1,7 @@
 import { BrowserWindow } from 'electron'
 import { spawn, ChildProcess } from 'child_process'
+import * as path from 'path'
+import * as os from 'os'
 import type { CreatePtyOptions } from '../src/types'
 import { broadcastHub } from './remote/broadcast-hub'
 import { logger } from './logger'
@@ -25,14 +27,39 @@ interface PtyInstance {
   type: 'terminal'  // Unified to 'terminal' - agent types handled by agentPreset
   cwd: string
   usePty: boolean
+  agentPreset?: string
 }
 
 export class PtyManager {
   private instances: Map<string, PtyInstance> = new Map()
   private getWindows: () => BrowserWindow[]
+  private dataListeners: Map<string, Set<(data: string) => void>> = new Map()
+  private globalDataListeners: Set<(id: string, data: string) => void> = new Set()
 
   constructor(getWindows: () => BrowserWindow[]) {
     this.getWindows = getWindows
+  }
+
+  /** Register a callback for PTY output on a specific terminal */
+  onData(id: string, callback: (data: string) => void): () => void {
+    let set = this.dataListeners.get(id)
+    if (!set) {
+      set = new Set()
+      this.dataListeners.set(id, set)
+    }
+    set.add(callback)
+    return () => {
+      set?.delete(callback)
+      if (set?.size === 0) {
+        this.dataListeners.delete(id)
+      }
+    }
+  }
+
+  /** Register a callback for all PTY output (used by agent managers) */
+  onAnyData(callback: (id: string, data: string) => void): () => void {
+    this.globalDataListeners.add(callback)
+    return () => this.globalDataListeners.delete(callback)
   }
 
   private broadcast(channel: string, ...args: unknown[]) {
@@ -46,6 +73,19 @@ export class PtyManager {
       }
     }
     broadcastHub.broadcast(channel, ...args)
+  }
+
+  private emitData(id: string, data: string) {
+    const listeners = this.dataListeners.get(id)
+    if (listeners) {
+      for (const cb of listeners) {
+        try { cb(data) } catch { /* ignore */ }
+      }
+    }
+    for (const cb of this.globalDataListeners) {
+      try { cb(id, data) } catch { /* ignore */ }
+    }
+    this.broadcast('pty:output', id, data)
   }
 
   private getDefaultShell(): string {
@@ -76,6 +116,44 @@ export class PtyManager {
         return '/bin/sh'
       }
     }
+  }
+
+  private checkShellConfig(shell: string): string | null {
+    const fs = require('fs')
+    const home = os.homedir()
+    const shellName = path.basename(shell).toLowerCase()
+
+    if (process.platform === 'win32') {
+      const psProfiles = [
+        path.join(home, 'Documents', 'PowerShell', 'Microsoft.PowerShell_profile.ps1'),
+        path.join(home, 'Documents', 'WindowsPowerShell', 'Microsoft.PowerShell_profile.ps1'),
+      ]
+      const hasProfile = psProfiles.some((p: string) => fs.existsSync(p))
+      if (!hasProfile) {
+        return '[Hint] PowerShell profile not found. To persist PATH and aliases, create it with:\n' +
+               '  New-Item -Path $PROFILE -Type File -Force\n' +
+               'Then edit it: notepad $PROFILE'
+      }
+    } else {
+      const configFiles: string[] = []
+      if (shellName.includes('zsh')) {
+        configFiles.push(path.join(home, '.zshrc'))
+      } else if (shellName.includes('bash')) {
+        configFiles.push(path.join(home, '.bashrc'), path.join(home, '.bash_profile'))
+      } else if (shellName.includes('fish')) {
+        configFiles.push(path.join(home, '.config', 'fish', 'config.fish'))
+      } else {
+        configFiles.push(path.join(home, '.profile'))
+      }
+      const hasConfig = configFiles.some((p: string) => fs.existsSync(p))
+      if (!hasConfig) {
+        const file = configFiles[0]
+        return `[Hint] Shell config not found (${path.basename(file)}). To persist PATH and aliases, create it with:\n` +
+               `  touch ${file}\n` +
+               `Then add your exports/aliases to that file.`
+      }
+    }
+    return null
   }
 
   create(options: CreatePtyOptions): boolean {
@@ -128,7 +206,7 @@ export class PtyManager {
         })
 
         ptyProcess.onData((data: string) => {
-          this.broadcast('pty:output', id, data)
+          this.emitData(id, data)
         })
 
         ptyProcess.onExit(({ exitCode }: { exitCode: number }) => {
@@ -136,7 +214,7 @@ export class PtyManager {
           this.instances.delete(id)
         })
 
-        this.instances.set(id, { process: ptyProcess, type, cwd, usePty: true })
+        this.instances.set(id, { process: ptyProcess, type, cwd, usePty: true, agentPreset: options.agentPreset })
         usedPty = true
         logger.log('Created terminal using node-pty')
       } catch (e) {
@@ -184,11 +262,11 @@ export class PtyManager {
         })
 
         childProcess.stdout?.on('data', (data: Buffer) => {
-          this.broadcast('pty:output', id, data.toString())
+          this.emitData(id, data.toString())
         })
 
         childProcess.stderr?.on('data', (data: Buffer) => {
-          this.broadcast('pty:output', id, data.toString())
+          this.emitData(id, data.toString())
         })
 
         childProcess.on('exit', (exitCode: number | null) => {
@@ -204,11 +282,21 @@ export class PtyManager {
         // Send initial message
         this.broadcast('pty:output', id, `[Terminal - child_process mode]\r\n`)
 
-        this.instances.set(id, { process: childProcess, type, cwd, usePty: false })
+        this.instances.set(id, { process: childProcess, type, cwd, usePty: false, agentPreset: options.agentPreset })
         logger.log('Created terminal using child_process fallback')
       } catch (error) {
         logger.error('Failed to create terminal:', error)
         return false
+      }
+    }
+
+    // Warn if shell config is missing (skip for Claude Code agent terminals)
+    if (!options.agentPreset || options.agentPreset !== 'claude-code') {
+      const hint = this.checkShellConfig(shell)
+      if (hint) {
+        setTimeout(() => {
+          this.emitData(id, `\r\n${hint.replace(/\n/g, '\r\n')}\r\n`)
+        }, 500)
       }
     }
 

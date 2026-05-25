@@ -182,6 +182,20 @@ export function PlatformHubPanel({ onClose }: PlatformHubPanelProps) {
     }
   }
 
+  const handleRegenerateMetadata = async (id: string) => {
+    const updated = await window.electronAPI.contextPackage.generateMetadata(id)
+    if (updated) setPackages(prev => prev.map(p => (p.id === id ? updated : p)))
+  }
+
+  const handleEnrichMetadata = async () => {
+    await window.electronAPI.contextPackage.enrichMetadata()
+    refreshPackages()
+  }
+
+  const handleRebuildIndex = async () => {
+    await window.electronAPI.contextRetrieval.rebuildIndex()
+  }
+
   const openEditPackage = (p: ContextPackage) => {
     setEditingPkg(p)
     setPkgForm({
@@ -458,6 +472,12 @@ export function PlatformHubPanel({ onClose }: PlatformHubPanelProps) {
                       value={libSearch}
                       onChange={e => setLibSearch(e.target.value)}
                     />
+                    <button type="button" className="settings-cancel-btn" onClick={() => void handleEnrichMetadata()}>
+                      {t('platform.context.enrichMetadata')}
+                    </button>
+                    <button type="button" className="settings-cancel-btn" onClick={() => void handleRebuildIndex()}>
+                      {t('platform.context.rebuildIndex')}
+                    </button>
                     <button
                       type="button"
                       className="settings-save-btn platform-context-new-btn"
@@ -545,11 +565,33 @@ export function PlatformHubPanel({ onClose }: PlatformHubPanelProps) {
                               ))}
                             </div>
                           )}
+                          {libSelectedPkg.metadata && (
+                            <div className="platform-lib-detail-metadata">
+                              {libSelectedPkg.metadata.summary && <p>{libSelectedPkg.metadata.summary}</p>}
+                              {libSelectedPkg.metadata.autoTags?.length ? (
+                                <div className="platform-pkg-tags">
+                                  {libSelectedPkg.metadata.autoTags.map(tag => <span key={tag} className="platform-tag">{tag}</span>)}
+                                </div>
+                              ) : null}
+                              <div className="platform-lib-detail-meta">
+                                ~{libSelectedPkg.metadata.tokenEstimate ?? 0} tokens · {libSelectedPkg.metadata.language || '-'} · {libSelectedPkg.metadata.framework || '-'}
+                              </div>
+                              <div className="platform-lib-detail-meta">
+                                hash: {libSelectedPkg.metadata.contentHash?.slice(0, 16) ?? '-'} · {libSelectedPkg.metadata.generatedAt ? new Date(libSelectedPkg.metadata.generatedAt).toLocaleString() : '-'}
+                              </div>
+                              {libSelectedPkg.metadata.keywords?.length ? (
+                                <div className="platform-lib-detail-meta">{libSelectedPkg.metadata.keywords.slice(0, 20).join(', ')}</div>
+                              ) : null}
+                            </div>
+                          )}
                           <pre className="platform-lib-detail-preview">{libSelectedPkg.content.slice(0, 2000)}{libSelectedPkg.content.length > 2000 ? '\n…' : ''}</pre>
                           <div className="platform-lib-detail-meta">{libSelectedPkg.id}</div>
                           <div className="platform-form-actions platform-lib-detail-actions">
                             <button type="button" className="settings-save-btn" onClick={() => openEditPackage(libSelectedPkg)}>
                               {t('platform.context.editBtn')}
+                            </button>
+                            <button type="button" className="settings-cancel-btn" onClick={() => void handleRegenerateMetadata(libSelectedPkg.id)}>
+                              {t('platform.context.regenerateMetadata')}
                             </button>
                             <button
                               type="button"

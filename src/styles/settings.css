@@ -13,12 +13,42 @@
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
   border-radius: 8px;
-  width: 450px;
+  width: 520px;
   max-width: 90vw;
   max-height: 80vh;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+.settings-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 10px 20px 0;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+}
+
+.settings-tabs button {
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.settings-tabs button:hover {
+  color: var(--text-primary);
+}
+
+.settings-tabs button.active {
+  color: var(--accent-color);
+  border-bottom-color: var(--accent-color);
 }
 
 .settings-header {
@@ -602,4 +632,246 @@
 .statusline-template-btn:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
+}
+
+/* Agent Config Cards */
+.agent-config-card {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  margin-bottom: 16px;
+  overflow: hidden;
+  transition: opacity 0.2s;
+}
+
+.agent-config-card--disabled {
+  opacity: 0.75;
+  border-color: var(--danger-color);
+}
+
+.agent-config-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.agent-config-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.agent-config-icon {
+  font-size: 16px;
+  width: 20px;
+  text-align: center;
+}
+
+.agent-config-badge {
+  margin-left: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+}
+
+.agent-config-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.agent-config-toggle input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent-color);
+  cursor: pointer;
+}
+
+.agent-config-toggle--inline {
+  padding: 0 14px 12px;
+}
+
+.agent-config-alert {
+  padding: 10px 14px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.agent-config-alert--danger {
+  background: rgba(229, 83, 75, 0.1);
+  color: var(--danger-color);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.agent-config-alert--danger a {
+  color: var(--danger-color);
+  text-decoration: underline;
+  margin-top: 4px;
+  display: inline-block;
+}
+
+.agent-config-alert--warning {
+  background: rgba(210, 166, 50, 0.1);
+  color: var(--warning-color);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.agent-config-fields {
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.agent-config-fields .settings-group {
+  margin-bottom: 0;
+}
+
+.agent-config-fields .settings-group label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  margin-bottom: 6px;
+}
+
+.agent-config-fields input[type="text"],
+.agent-config-fields textarea {
+  background: var(--bg-primary);
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+  font-size: 12px;
+}
+
+.agent-config-fields input[type="text"]:disabled,
+.agent-config-fields textarea:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.agent-config-desc {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin: 6px 0 0;
+  line-height: 1.5;
+  white-space: pre-line;
+}
+
+/* Mode switcher (built-in vs local-cli) */
+.agent-config-mode-bar {
+  display: flex;
+  gap: 0;
+  padding: 8px 14px 0;
+  border-bottom: 1px solid transparent;
+}
+
+.agent-config-mode-btn {
+  flex: 1;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.agent-config-mode-btn:first-child { border-radius: 4px 0 0 4px; }
+.agent-config-mode-btn:last-child  { border-radius: 0 4px 4px 0; border-left: none; }
+
+.agent-config-mode-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.agent-config-mode-btn.active {
+  background: var(--accent-color);
+  color: #fff;
+  border-color: var(--accent-color);
+}
+
+/* API key input row */
+.agent-config-apikey-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.agent-config-apikey-row input[type="password"] {
+  flex: 1;
+  font-family: 'SF Mono', Monaco, monospace;
+}
+
+.agent-config-clear-btn {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  border-radius: 4px;
+  width: 28px;
+  height: 28px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+}
+
+.agent-config-clear-btn:hover {
+  background: var(--bg-hover);
+  color: var(--danger-color);
+}
+
+.agent-config-docs-link {
+  color: var(--accent-color);
+  text-decoration: none;
+  font-size: 12px;
+}
+
+.agent-config-docs-link:hover {
+  text-decoration: underline;
+}
+
+/* BuiltinAgentPanel code rendering */
+.builtin-agent-code-block {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin: 8px 0;
+  overflow-x: auto;
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-primary);
+}
+
+.builtin-agent-code-block code {
+  font-family: inherit;
+  color: inherit;
+  background: none;
+  padding: 0;
+}
+
+.builtin-agent-inline-code {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.9em;
+  color: var(--accent-color);
 }

@@ -409,9 +409,9 @@ html[data-theme='light'] {
 }
 
 .platform-hub-panel {
-  max-width: 960px;
-  width: min(96vw, 960px);
-  max-height: 92vh;
+  max-width: 1400px;
+  width: min(96vw, 1400px);
+  max-height: 94vh;
   border-radius: var(--radius-md);
   border: 1px solid var(--border-color);
   background: var(--bg-secondary);
@@ -1204,4 +1204,137 @@ html[data-theme='light'] {
 
 .platform-lib-detail-actions {
   margin-top: 8px;
+}
+
+/* ─── Workflow Canvas ────────────────────────────────────────────── */
+
+.workflow-canvas {
+  background: var(--bg-primary);
+}
+
+.workflow-svg {
+  user-select: none;
+}
+
+/* Node animations */
+@keyframes wfPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+@keyframes wfSpin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes wfFlash {
+  0%, 100% { stroke: var(--border-color); }
+  50% { stroke: var(--danger-color); }
+}
+
+.wf-node .wf-node-status.running {
+  animation: wfPulse 1.2s infinite;
+}
+
+.wf-node .wf-node-status.waiting_agent,
+.wf-node .wf-node-status.waiting_human,
+.wf-node .wf-node-status.waiting_event {
+  animation: wfSpin 2s linear infinite;
+  transform-origin: center;
+}
+
+.wf-node.failed .wf-node-bg {
+  animation: wfFlash 1s infinite;
+}
+
+.wf-node.selected .wf-node-bg {
+  filter: brightness(1.15);
+}
+
+/* Workflow node status colors (theme-aware) */
+.wf-node-status.pending,
+.wf-node-status.queued,
+.wf-node-status.skipped,
+.wf-node-status.cancelled,
+.wf-node-status.timeout {
+  fill: var(--text-secondary);
+}
+
+.wf-node-status.running {
+  fill: var(--accent-color);
+}
+
+.wf-node-status.waiting_agent,
+.wf-node-status.waiting_human,
+.wf-node-status.waiting_event {
+  fill: var(--warning-color, var(--accent-color));
+}
+
+.wf-node-status.completed {
+  fill: var(--success-color, #98c379);
+}
+
+.wf-node-status.failed {
+  fill: var(--danger-color);
+}
+
+.wf-edge:hover path[strokeWidth="1.5"] {
+  stroke-width: 2.5;
+}
+
+/* Workflow execution overlay */
+.workflow-exec-overlay {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  right: 8px;
+  padding: 8px 12px;
+  background: color-mix(in srgb, var(--bg-secondary) 92%, transparent);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  z-index: 10;
+}
+
+.workflow-exec-overlay .exec-status {
+  font-weight: 600;
+}
+
+.workflow-exec-overlay .exec-status.running {
+  color: var(--accent-color);
+}
+
+.workflow-exec-overlay .exec-status.completed {
+  color: var(--success-color, #98c379);
+}
+
+.workflow-exec-overlay .exec-status.failed {
+  color: var(--danger-color);
+}
+
+.workflow-exec-overlay .exec-error-text {
+  color: var(--danger-color);
+  font-size: 11px;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.workflow-exec-overlay .exec-progress {
+  flex: 1;
+  height: 4px;
+  background: var(--bg-tertiary);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.workflow-exec-overlay .exec-progress-bar {
+  height: 100%;
+  background: var(--accent-color);
+  border-radius: 2px;
+  transition: width 0.3s ease;
 }

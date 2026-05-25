@@ -145,3 +145,127 @@ export async function runMcpHealthChecks(): Promise<void> {
     logger.log(`[mcp] health check ${s.name}: ${result.ok ? 'OK' : result.error}`)
   }
 }
+
+// ---------------------------------------------------------------------------
+// MCP Tool Call (stdio transport only for now)
+// ---------------------------------------------------------------------------
+
+interface McpJsonRpcMessage {
+  jsonrpc: '2.0'
+  id?: number | string
+  method?: string
+  params?: unknown
+  result?: unknown
+  error?: { code: number; message: string; data?: unknown }
+}
+
+let _mcpRequestId = 0
+function nextMcpRequestId(): number {
+  return ++_mcpRequestId
+}
+
+/**
+ * Call an MCP tool via stdio transport.
+ * Spawns the server process, performs initialize handshake, calls the tool, then kills.
+ */
+export async function callMcpTool(
+  serverId: string,
+  toolName: string,
+  toolInput: Record<string, unknown>,
+  timeoutMs = 30_000
+): Promise<{ ok: boolean; result?: unknown; error?: string }> {
+  const server = await getMcpServer(serverId)
+  if (!server) return { ok: false, error: 'Server not found' }
+  if (!server.enabled) return { ok: false, error: 'Server is disabled' }
+  if (server.transport !== 'stdio') {
+    return { ok: false, error: `Transport ${server.transport} not yet supported for tool calls` }
+  }
+
+  const { spawn } = await import('child_process')
+  const child = spawn(server.command || 'echo', server.args || ['hello'], {
+    env: { ...process.env, ...server.env },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  })
+
+  const pending = new Map<number | string, { resolve: (msg: McpJsonRpcMessage) => void; reject: (err: Error) => void }>()
+  let buffer = ''
+
+  child.stdout?.on('data', (d: Buffer) => {
+    buffer += d.toString('utf-8')
+    const lines = buffer.split('\n')
+    buffer = lines.pop() || ''
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (!trimmed) continue
+      try {
+        const msg = JSON.parse(trimmed) as McpJsonRpcMessage
+        if (msg.id !== undefined && pending.has(msg.id)) {
+          pending.get(msg.id)!.resolve(msg)
+          pending.delete(msg.id)
+        }
+      } catch {
+        logger.log('[mcp] non-JSON stdout:', trimmed.slice(0, 200))
+      }
+    }
+  })
+
+  child.stderr?.on('data', (d: Buffer) => {
+    logger.log('[mcp] stderr:', d.toString('utf-8').slice(0, 200))
+  })
+
+  function send(msg: Omit<McpJsonRpcMessage, 'jsonrpc'>): void {
+    const full = JSON.stringify({ jsonrpc: '2.0', ...msg }) + '\n'
+    child.stdin?.write(full)
+  }
+
+  function waitForResponse(id: number | string, ms: number): Promise<McpJsonRpcMessage> {
+    return new Promise((resolve, reject) => {
+      pending.set(id, { resolve, reject })
+      setTimeout(() => {
+        if (pending.has(id)) {
+          pending.delete(id)
+          reject(new Error(`MCP request ${id} timed out after ${ms}ms`))
+        }
+      }, ms)
+    })
+  }
+
+  try {
+    // Initialize handshake
+    const initId = nextMcpRequestId()
+    send({
+      id: initId,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2024-11-05',
+        capabilities: {},
+        clientInfo: { name: 'better-agent-terminal', version: app.getVersion() },
+      },
+    })
+    const initRes = await waitForResponse(initId, 10_000)
+    if (initRes.error) {
+      return { ok: false, error: `Initialize failed: ${initRes.error.message}` }
+    }
+
+    // Send initialized notification
+    send({ method: 'notifications/initialized' })
+
+    // Call tool
+    const callId = nextMcpRequestId()
+    send({
+      id: callId,
+      method: 'tools/call',
+      params: { name: toolName, arguments: toolInput },
+    })
+    const callRes = await waitForResponse(callId, timeoutMs)
+    if (callRes.error) {
+      return { ok: false, error: `Tool call failed: ${callRes.error.message}` }
+    }
+
+    return { ok: true, result: callRes.result }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+  } finally {
+    try { child.kill() } catch { /* noop */ }
+  }
+}

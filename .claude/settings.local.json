@@ -53,7 +53,20 @@
       "Bash(zip -r ~/Library/Caches/electron/electron-v28.3.3-darwin-arm64.zip .)",
       "Bash(npm exec:*)",
       "Bash(python3 -c \"import yaml; yaml.safe_load\\(open\\(''.github/workflows/build-packages.yml''\\)\\)\")",
-      "Bash(python3 -c \"import yaml; yaml.safe_load\\(open\\(''.github/workflows/release.yml''\\)\\)\")"
+      "Bash(python3 -c \"import yaml; yaml.safe_load\\(open\\(''.github/workflows/release.yml''\\)\\)\")",
+      "WebFetch(domain:docs.github.com)",
+      "WebFetch(domain:www.npmjs.com)",
+      "WebFetch(domain:ai.google.dev)",
+      "WebFetch(domain:stackoverflow.com)",
+      "WebFetch(domain:dev.to)",
+      "WebFetch(domain:www.theverge.com)",
+      "WebFetch(domain:www.bing.com)",
+      "WebFetch(domain:github.blog)",
+      "Bash(npx tsc:*)",
+      "Bash(\"/tmp/test-write.txt\":*)",
+      "Read(//tmp/**)",
+      "Bash(node:*)",
+      "Bash(git:*)"
     ]
   }
 }

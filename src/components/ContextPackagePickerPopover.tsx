@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Workspace } from '../types'
+import type { ContextPackage, ContextRecommendation } from '../types/platform-extensions'
 import {
   groupContextPackagesForTree,
   filterContextTreeModel,
@@ -15,6 +16,7 @@ export interface ContextPackagePickerPopoverProps {
   /** Highlight folder for this workspace (current agent tab). */
   terminalWorkspaceId?: string
   selectedIds: string[]
+  recommendations?: ContextRecommendation[]
   onClose: () => void
   onApply: (ids: string[]) => void
 }
@@ -26,6 +28,7 @@ export function ContextPackagePickerPopover({
   workspaces,
   terminalWorkspaceId,
   selectedIds,
+  recommendations = [],
   onClose,
   onApply,
 }: Readonly<ContextPackagePickerPopoverProps>) {
@@ -64,6 +67,29 @@ export function ContextPackagePickerPopover({
   const togglePkg = useCallback((id: string) => {
     setDraft(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]))
   }, [])
+
+  const renderPkgLabel = (p: ContextPackage, sectionOther = false) => (
+    <label key={p.id} className="ctx-pkg-tree-item">
+      <input type="checkbox" checked={draft.includes(p.id)} onChange={() => togglePkg(p.id)} />
+      <span className="ctx-pkg-tree-item-main">
+        <span className="ctx-pkg-tree-item-name">{p.name}</span>
+        {(p.metadata?.shortSummary || p.description) && (
+          <span className="ctx-pkg-tree-item-summary">{p.metadata?.shortSummary || p.description}</span>
+        )}
+        <span className="ctx-pkg-tree-item-tags">
+          {[...(p.tags ?? []), ...(p.metadata?.autoTags ?? [])].slice(0, 5).map(tag => (
+            <span key={tag} className="ctx-pkg-tree-item-tag">{tag}</span>
+          ))}
+          {p.metadata?.tokenEstimate ? <span className="ctx-pkg-tree-item-token">~{p.metadata.tokenEstimate} tokens</span> : null}
+        </span>
+      </span>
+      {p.workspaceRoot && sectionOther && (
+        <span className="ctx-pkg-tree-item-hint" title={p.workspaceRoot}>
+          {t('claude.contextPickerCrossProject')}
+        </span>
+      )}
+    </label>
+  )
 
   useEffect(() => {
     if (!open) return
@@ -120,17 +146,7 @@ export function ContextPackagePickerPopover({
             {g.packages.length === 0 ? (
               <div className="ctx-pkg-tree-empty">{t('platform.context.treeFolderEmpty')}</div>
             ) : (
-              g.packages.map(p => (
-                <label key={p.id} className="ctx-pkg-tree-item">
-                  <input type="checkbox" checked={draft.includes(p.id)} onChange={() => togglePkg(p.id)} />
-                  <span className="ctx-pkg-tree-item-name">{p.name}</span>
-                  {p.workspaceRoot && sectionOther && (
-                    <span className="ctx-pkg-tree-item-hint" title={p.workspaceRoot}>
-                      {t('claude.contextPickerCrossProject')}
-                    </span>
-                  )}
-                </label>
-              ))
+              g.packages.map(p => renderPkgLabel(p, sectionOther))
             )}
           </div>
         )}
@@ -158,6 +174,15 @@ export function ContextPackagePickerPopover({
         />
       </div>
       <div className="ctx-pkg-picker-body">
+        {recommendations.length > 0 && (
+          <>
+            <div className="ctx-pkg-tree-section-label">{t('claude.contextRecommendations')}</div>
+            {recommendations.map(rec => {
+              const pkg = packages.find(p => p.id === rec.packageId)
+              return pkg ? renderPkgLabel(pkg) : null
+            })}
+          </>
+        )}
         <div className="ctx-pkg-tree-section-label">{t('platform.context.treeOpenWorkspaces')}</div>
         {tree.open.length === 0 ? (
           <div className="ctx-pkg-tree-empty">{t('platform.context.treeNoWorkspaces')}</div>
@@ -193,12 +218,7 @@ export function ContextPackagePickerPopover({
               {tree.global.length === 0 ? (
                 <div className="ctx-pkg-tree-empty">{t('platform.context.treeFolderEmpty')}</div>
               ) : (
-                tree.global.map(p => (
-                  <label key={p.id} className="ctx-pkg-tree-item">
-                    <input type="checkbox" checked={draft.includes(p.id)} onChange={() => togglePkg(p.id)} />
-                    <span className="ctx-pkg-tree-item-name">{p.name}</span>
-                  </label>
-                ))
+                tree.global.map(p => renderPkgLabel(p))
               )}
             </div>
           )}
