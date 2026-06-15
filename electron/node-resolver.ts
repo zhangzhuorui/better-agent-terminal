@@ -78,11 +78,15 @@ export function compareVersions(a: string, b: string): number {
 
 /**
  * Find the latest node binary in a versioned directory (e.g., ~/.nvm/versions/node/).
+ * Only considers versions with major >= minimumMajor (default 18).
  * Returns the absolute path to the node binary, or null if not found.
  */
-export function findLatestInVersionedDir(dir: string, binSubpath: string): string | null {
+export function findLatestInVersionedDir(dir: string, binSubpath: string, minimumMajor: number = MINIMUM_NODE_MAJOR): string | null {
   try {
-    const versions = fs.readdirSync(dir).filter(v => v.startsWith('v'))
+    let versions = fs.readdirSync(dir).filter(v => v.startsWith('v'))
+    if (minimumMajor > 0) {
+      versions = versions.filter(v => parseMajorVersion(v) >= minimumMajor)
+    }
     if (versions.length === 0) return null
     versions.sort(compareVersions)
     const latest = versions[versions.length - 1]
@@ -92,8 +96,38 @@ export function findLatestInVersionedDir(dir: string, binSubpath: string): strin
   return null
 }
 
+/** Minimum Node.js major version required by @anthropic-ai/claude-code */
+const MINIMUM_NODE_MAJOR = 18
+
 /**
- * Scan process.env.PATH for a node binary.
+ * Get the major version from a version string like "v16.14.0" or "20.11.0".
+ */
+function parseMajorVersion(versionStr: string): number {
+  return parseInt(versionStr.replace(/^v/, '').split('.')[0], 10) || 0
+}
+
+/**
+ * Resolve a node binary to a real path (following symlinks), then read its version.
+ * Returns the major version number, or 0 if the version cannot be determined.
+ */
+function getNodeMajorVersion(nodePath: string): number {
+  try {
+    // Resolve symlinks to get to the actual binary
+    const realPath = fs.realpathSync(nodePath)
+    const { execSync } = require('child_process') as typeof import('child_process')
+    const versionOutput = execSync(`"${realPath}" --version`, {
+      encoding: 'utf8',
+      timeout: 5000,
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: undefined },
+    }).trim()
+    return parseMajorVersion(versionOutput)
+  } catch {
+    return 0
+  }
+}
+
+/**
+ * Scan process.env.PATH for a node binary that meets the minimum version requirement.
  */
 function findNodeInPath(): string | null {
   const pathDirs = (process.env.PATH || '').split(path.delimiter)
@@ -103,7 +137,9 @@ function findNodeInPath(): string | null {
     const candidate = path.join(dir, nodeName)
     try {
       if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
-        return candidate
+        // Verify the version is compatible
+        const major = getNodeMajorVersion(candidate)
+        if (major >= MINIMUM_NODE_MAJOR) return candidate
       }
     } catch { /* skip */ }
   }
@@ -112,26 +148,43 @@ function findNodeInPath(): string | null {
 
 /**
  * Resolve the node binary path.
- * First checks if node is already accessible via process.env.PATH,
- * then falls back to common installation locations.
+ *
+ * Resolution order:
+ * 1. Check version-managed directories (nvm, fnm) first — these contain
+ *    explicitly installed versions, and we can pick the latest compatible one.
+ * 2. Check current PATH for a compatible node binary.
+ * 3. Check common installation locations (Homebrew, system, volta).
+ * 4. Fallback: use Electron's own binary with ELECTRON_RUN_AS_NODE=1.
  */
 export function resolveNodePath(): string {
-  // 1. Check current PATH
-  const fromPath = findNodeInPath()
-  if (fromPath) return fromPath
-
-  // 2. Check common installation locations
+  // 1. Check version-managed directories FIRST (nvm, fnm).
+  //    These always have the user's preferred/managed versions and are more
+  //    likely to be up-to-date than a stray /usr/local/bin/node from years ago.
   for (const entry of getCandidates()) {
     if (entry.type === 'versioned') {
-      const found = findLatestInVersionedDir(entry.dir, entry.binSubpath)
+      const found = findLatestInVersionedDir(entry.dir, entry.binSubpath, MINIMUM_NODE_MAJOR)
       if (found) return found
-    } else {
-      if (fs.existsSync(entry.path)) return entry.path
     }
   }
 
-  // 3. Fallback: use Electron's own binary with ELECTRON_RUN_AS_NODE=1
-  // This makes the Electron binary behave as a plain Node.js runtime
+  // 2. Check current PATH (with version filter).
+  const fromPath = findNodeInPath()
+  if (fromPath) return fromPath
+
+  // 3. Check direct installation locations.
+  for (const entry of getCandidates()) {
+    if (entry.type === 'direct') {
+      try {
+        if (fs.existsSync(entry.path)) {
+          const major = getNodeMajorVersion(entry.path)
+          if (major >= MINIMUM_NODE_MAJOR) return entry.path
+        }
+      } catch { /* skip */ }
+    }
+  }
+
+  // 4. Fallback: use Electron's own binary with ELECTRON_RUN_AS_NODE=1
+  //    This makes the Electron binary behave as a plain Node.js runtime.
   return process.execPath
 }
 
