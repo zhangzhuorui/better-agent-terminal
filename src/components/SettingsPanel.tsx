@@ -147,7 +147,28 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
   const [contextCacheStats, setContextCacheStats] = useState<{ hit: number; miss: number; size: number; lastClearedAt: number } | null>(null)
 
   // Agent local config detection
-  const [agentChecks, setAgentChecks] = useState<Record<string, { installed: boolean; envReady: boolean; missingEnvVars: string[] }>>({})
+  const [agentChecks, setAgentChecks] = useState<Record<string, { installed: boolean; envReady: boolean; missingEnvVars: string[]; version?: string }>>({})
+  const [detectedKeys, setDetectedKeys] = useState<{ key: string; source: string; envVar: string }[]>([])
+  const [validatingKey, setValidatingKey] = useState<string | null>(null)
+  const [validationResult, setValidationResult] = useState<{ presetId: string; ok: boolean; message: string } | null>(null)
+
+  const runAgentDetection = useCallback(async () => {
+    try {
+      const result = await window.electronAPI.agent.checkLocalConfigs()
+      setAgentChecks(result.configs)
+      setDetectedKeys(result.detectedKeys)
+      // Auto-disable agents that are not locally installed (only for local-cli mode)
+      for (const preset of AGENT_PRESETS.filter(p => p.id !== 'none')) {
+        const check = result.configs[preset.id]
+        const config = settingsStore.getAgentConfig(preset.id)
+        if (check && !check.installed && config.mode === 'local-cli' && config.enabled) {
+          settingsStore.setAgentConfig(preset.id, { enabled: false })
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }, [])
 
   // Get current platform for filtering shell options
   const platform = window.electronAPI?.platform || 'darwin'
@@ -182,20 +203,8 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
 
   // Detect local agent installations on mount
   useEffect(() => {
-    window.electronAPI.agent.checkLocalConfigs().then(configs => {
-      setAgentChecks(configs)
-      // Auto-disable agents that are not locally installed
-      for (const preset of AGENT_PRESETS.filter(p => p.id !== 'none')) {
-        const check = configs[preset.id]
-        if (check && !check.installed) {
-          const config = settingsStore.getAgentConfig(preset.id)
-          if (config.enabled) {
-            settingsStore.setAgentConfig(preset.id, { enabled: false })
-          }
-        }
-      }
-    }).catch(() => {})
-  }, [])
+    runAgentDetection()
+  }, [runAgentDetection])
 
   const handleShellChange = (shell: ShellType) => {
     settingsStore.setShell(shell)
@@ -836,7 +845,54 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
 
           {activeTab === 'agents' && (
             <div className="settings-section">
-              <h3>{t('settings.agentConfig')}</h3>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                <h3 style={{ margin: 0 }}>{t('settings.agentConfig')}</h3>
+                <button
+                  className="settings-save-btn"
+                  onClick={runAgentDetection}
+                  style={{ padding: '4px 10px', fontSize: 12 }}
+                >
+                  {t('settings.agentRefreshDetection')}
+                </button>
+              </div>
+
+              {/* Detected API keys from shell configs */}
+              {detectedKeys.length > 0 && (
+                <div className="agent-config-alert agent-config-alert--info" style={{ marginBottom: 12 }}>
+                  <div style={{ fontWeight: 600, marginBottom: 4 }}>{t('settings.detectedApiKeys')}</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {detectedKeys.map((dk, idx) => {
+                      const preset = AGENT_PRESETS.find(p => p.apiKeyEnvVar === dk.envVar)
+                      if (!preset) return null
+                      const config = settingsStore.getAgentConfig(preset.id)
+                      return (
+                        <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                          <span style={{ color: 'var(--text-secondary)' }}>
+                            {dk.envVar} ({dk.source}):
+                          </span>
+                          <code style={{ fontSize: 11 }}>{dk.key.slice(0, 8)}••••{dk.key.slice(-4)}</code>
+                          {!config.apiKey && (
+                            <button
+                              className="agent-config-mode-btn"
+                              style={{ padding: '1px 6px', fontSize: 11 }}
+                              onClick={async () => {
+                                const encrypted = await window.electronAPI.secret.encrypt(dk.key)
+                                settingsStore.setAgentConfig(preset.id, { apiKey: encrypted, mode: 'builtin' })
+                              }}
+                            >
+                              {t('settings.useDetectedKey', { agent: preset.name })}
+                            </button>
+                          )}
+                          {config.apiKey && (
+                            <span style={{ color: 'var(--success-color)', fontSize: 11 }}>✓ {t('settings.keyAlreadySet')}</span>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
               {AGENT_PRESETS.filter(p => p.id !== 'none').map(preset => {
                 const config = settingsStore.getAgentConfig(preset.id)
                 const check = agentChecks[preset.id]
@@ -856,6 +912,11 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                         <span className="agent-config-badge">
                           {isBuiltin ? 'Built-in' : preset.type === 'sdk' ? 'SDK' : 'CLI'}
                         </span>
+                        {check?.version && (
+                          <span className="agent-config-version" style={{ fontSize: 11, color: 'var(--text-secondary)', marginLeft: 4 }}>
+                            {check.version}
+                          </span>
+                        )}
                       </div>
                       <label className="agent-config-toggle">
                         <input
@@ -954,6 +1015,50 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                                 >
                                   ✕
                                 </button>
+                              )}
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+                              {config.apiKey && (
+                                <button
+                                  className="agent-config-mode-btn"
+                                  style={{ padding: '2px 8px', fontSize: 11 }}
+                                  disabled={validatingKey === preset.id}
+                                  onClick={async () => {
+                                    setValidatingKey(preset.id)
+                                    setValidationResult(null)
+                                    try {
+                                      const decrypted = await window.electronAPI.secret.decrypt(config.apiKey!)
+                                      const res = await window.electronAPI.agent.validateApiKey(preset.id, decrypted, config.builtinBaseUrl)
+                                      setValidationResult({
+                                        presetId: preset.id,
+                                        ok: res.ok,
+                                        message: res.ok
+                                          ? (res.model ? `Connected (${res.model})` : 'Connected')
+                                          : (res.error || 'Failed'),
+                                      })
+                                    } catch (err: unknown) {
+                                      setValidationResult({
+                                        presetId: preset.id,
+                                        ok: false,
+                                        message: err instanceof Error ? err.message : String(err),
+                                      })
+                                    } finally {
+                                      setValidatingKey(null)
+                                    }
+                                  }}
+                                >
+                                  {validatingKey === preset.id ? 'Testing…' : t('settings.testConnection')}
+                                </button>
+                              )}
+                              {validationResult?.presetId === preset.id && (
+                                <span
+                                  style={{
+                                    fontSize: 12,
+                                    color: validationResult.ok ? 'var(--success-color)' : 'var(--danger-color)',
+                                  }}
+                                >
+                                  {validationResult.ok ? '✓' : '✗'} {validationResult.message}
+                                </span>
                               )}
                             </div>
                             <p className="agent-config-desc">{t('settings.agentApiKeyHint', { envVar: preset.apiKeyEnvVar || 'API_KEY' })}</p>

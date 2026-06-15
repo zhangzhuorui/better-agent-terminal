@@ -82,6 +82,12 @@ import * as auditEngine from './audit-engine'
 import * as retrievalEngine from './retrieval-engine'
 import * as mcpManager from './mcp-manager'
 import * as workflowEngine from './workflow-engine'
+import {
+  detectLocalAgentConfigs,
+  validateBuiltinApiKey,
+  getCachedDetectionResult,
+  type AgentDetectionResult,
+} from './agent-config-detector'
 
 // Startup timing — capture module load time before anything else
 const _processStart = Number(process.env._BAT_T0 || Date.now())
@@ -360,6 +366,16 @@ app.whenReady().then(async () => {
   logger.init(app.getPath('userData'))
   logger.log(`[startup] ═══════════════════════════════════════`)
   logger.log(`[startup] app.whenReady fired at +${t0 - _t0}ms from IPC reg, +${t0 - _processStart}ms from process`)
+
+  // Detect local agent configurations at startup
+  try {
+    const tDetect = Date.now()
+    const detection = detectLocalAgentConfigs()
+    logger.log(`[startup] agent detection: ${Date.now() - tDetect}ms`, Object.entries(detection.configs).map(([k, v]) => `${k}=${v.installed ? 'installed' : 'missing'}`).join(', '))
+  } catch (e) {
+    logger.error('Agent detection failed at startup:', e)
+  }
+
   const t1 = Date.now()
   buildMenu()
   logger.log(`[startup] buildMenu: ${Date.now() - t1}ms`)
@@ -1193,57 +1209,15 @@ function registerProxiedHandlers() {
   registerHandler('workflow:templates', () => workflowEngine.getWorkflowTemplates())
 
   // Agent local config detection
-  function commandExists(cmd: string): boolean {
-    try {
-      if (process.platform === 'win32') {
-        execFileSync('where', [cmd], { stdio: 'ignore', timeout: 3000 })
-      } else {
-        execFileSync('which', [cmd], { stdio: 'ignore', timeout: 3000 })
-      }
-      return true
-    } catch {
-      return false
-    }
-  }
+  registerHandler('agent:check-local-configs', (): AgentDetectionResult => {
+    const cached = getCachedDetectionResult()
+    if (cached) return cached
+    return detectLocalAgentConfigs()
+  })
 
-  registerHandler('agent:check-local-configs', () => {
-    const configs: Record<string, { installed: boolean; envReady: boolean; missingEnvVars: string[] }> = {}
-
-    // codex-cli
-    const codexInstalled = commandExists('codex')
-    const openaiKey = !!process.env.OPENAI_API_KEY
-    configs['codex-cli'] = {
-      installed: codexInstalled,
-      envReady: openaiKey,
-      missingEnvVars: openaiKey ? [] : ['OPENAI_API_KEY'],
-    }
-
-    // gemini-cli
-    const geminiInstalled = commandExists('gemini')
-    const googleKey = !!process.env.GOOGLE_API_KEY
-    configs['gemini-cli'] = {
-      installed: geminiInstalled,
-      envReady: googleKey,
-      missingEnvVars: googleKey ? [] : ['GOOGLE_API_KEY'],
-    }
-
-    // copilot-cli (gh CLI + copilot extension)
-    const ghInstalled = commandExists('gh')
-    configs['copilot-cli'] = {
-      installed: ghInstalled,
-      envReady: true,
-      missingEnvVars: [],
-    }
-
-    // claude-code
-    const claudeInstalled = commandExists('claude')
-    configs['claude-code'] = {
-      installed: claudeInstalled,
-      envReady: true,
-      missingEnvVars: [],
-    }
-
-    return configs
+  registerHandler('agent:validate-api-key', async (presetId: string, apiKey: string, baseUrl?: string) => {
+    const result = await validateBuiltinApiKey(presetId as import('../src/types/agent-presets').AgentPresetId, apiKey, baseUrl)
+    return result
   })
 
   // Git enhanced

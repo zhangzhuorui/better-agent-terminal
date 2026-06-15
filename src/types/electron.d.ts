@@ -28,7 +28,12 @@ interface ElectronAPI {
     getShellPath: (shell: string) => Promise<string>
   }
   agent: {
-    checkLocalConfigs: () => Promise<Record<string, { installed: boolean; envReady: boolean; missingEnvVars: string[] }>>
+    checkLocalConfigs: () => Promise<{
+      configs: Record<string, { installed: boolean; envReady: boolean; missingEnvVars: string[]; version?: string }>
+      detectedKeys: { key: string; source: string; envVar: string }[]
+      scannedAt: number
+    }>
+    validateApiKey: (presetId: string, apiKey: string, baseUrl?: string) => Promise<{ ok: boolean; error?: string; model?: string }>
   }
   builtinAgent: {
     startSession: (sessionId: string, presetId: string, opts: { model?: string; systemPrompt?: string; cwd?: string }) => Promise<boolean>

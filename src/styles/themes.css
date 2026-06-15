@@ -4,20 +4,30 @@
  */
 
 html[data-theme='light'] {
-  --bg-primary: #f5f5f5;
-  --bg-secondary: #ececec;
-  --bg-tertiary: #e2e2e2;
-  --bg-hover: #d8d8d8;
-  --text-primary: #1a1a1a;
-  --text-secondary: #5c5c5c;
-  --border-color: #c8c8c8;
-  --accent-color: #0063b1;
-  --accent-hover: #0078d4;
-  --claude-accent: #b45309;
-  --danger-color: #c62828;
+  --bg-primary: #f7f8fa;
+  --bg-secondary: #ffffff;
+  --bg-tertiary: #eef1f5;
+  --bg-hover: #e3e8ef;
+  --text-primary: #111827;
+  --text-secondary: #4b5563;
+  --border-color: #cfd6df;
+  --accent-color: #005ea8;
+  --accent-hover: #0070c9;
+  --claude-accent: #9a4d00;
+  --danger-color: #b91c1c;
+  --warning-color: #9a5b00;
+  --success-color: #047857;
 
-  --glass-bg: rgba(255, 255, 255, 0.88);
-  --glass-border: rgba(0, 0, 0, 0.08);
+  --chat-bg: #ffffff;
+  --chat-user-bg: #eef4ff;
+  --chat-code-bg: #f3f6fa;
+  --chat-code-border: #d7dde6;
+  --chat-inline-code-bg: #eef1f5;
+  --chat-inline-code-text: #7c2d12;
+  --chat-link-color: #005ea8;
+
+  --glass-bg: rgba(255, 255, 255, 0.9);
+  --glass-border: rgba(17, 24, 39, 0.1);
 }
 
 html[data-theme='light'] ::-webkit-scrollbar-track {

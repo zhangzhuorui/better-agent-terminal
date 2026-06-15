@@ -44,7 +44,13 @@ const electronAPI = {
     getShellPath: (shell: string) => ipcRenderer.invoke('settings:get-shell-path', shell)
   },
   agent: {
-    checkLocalConfigs: () => ipcRenderer.invoke('agent:check-local-configs') as Promise<Record<string, { installed: boolean; envReady: boolean; missingEnvVars: string[] }>>,
+    checkLocalConfigs: () => ipcRenderer.invoke('agent:check-local-configs') as Promise<{
+      configs: Record<string, { installed: boolean; envReady: boolean; missingEnvVars: string[]; version?: string }>
+      detectedKeys: { key: string; source: string; envVar: string }[]
+      scannedAt: number
+    }>,
+    validateApiKey: (presetId: string, apiKey: string, baseUrl?: string) =>
+      ipcRenderer.invoke('agent:validate-api-key', presetId, apiKey, baseUrl) as Promise<{ ok: boolean; error?: string; model?: string }>,
   },
   builtinAgent: {
     startSession: (sessionId: string, presetId: string, opts: { model?: string; systemPrompt?: string; cwd?: string }) =>

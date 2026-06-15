@@ -250,3 +250,74 @@ mark.search-highlight.current {
   max-height: 100%;
   object-fit: contain;
 }
+
+html[data-theme='light'] .path-link {
+  color: var(--chat-link-color, #005ea8);
+}
+
+html[data-theme='light'] .path-link:hover {
+  color: var(--accent-hover, #0070c9);
+}
+
+html[data-theme='light'] .url-link {
+  color: #0550ae;
+}
+
+html[data-theme='light'] .url-link:hover {
+  color: #0969da;
+}
+
+html[data-theme='light'] .path-preview-modal {
+  background: #ffffff;
+}
+
+html[data-theme='light'] .path-preview-body,
+html[data-theme='light'] .path-preview-text,
+html[data-theme='light'] .hlcode-table,
+html[data-theme='light'] .hlcode-line {
+  color: var(--text-primary);
+  background: #ffffff;
+}
+
+html[data-theme='light'] .hlcode-ln {
+  color: #6b7280;
+  opacity: 0.75;
+  background: #f6f8fb;
+  border-right-color: var(--chat-code-border, #d7dde6);
+}
+
+html[data-theme='light'] .path-preview-text code.hljs,
+html[data-theme='light'] .file-preview-text code.hljs {
+  color: #24292f;
+  background: transparent;
+}
+
+html[data-theme='light'] .hlcode-wrapper .hljs-comment,
+html[data-theme='light'] .hlcode-wrapper .hljs-quote {
+  color: #57606a;
+}
+
+html[data-theme='light'] .hlcode-wrapper .hljs-keyword,
+html[data-theme='light'] .hlcode-wrapper .hljs-selector-tag,
+html[data-theme='light'] .hlcode-wrapper .hljs-subst {
+  color: #cf222e;
+}
+
+html[data-theme='light'] .hlcode-wrapper .hljs-string,
+html[data-theme='light'] .hlcode-wrapper .hljs-attr,
+html[data-theme='light'] .hlcode-wrapper .hljs-symbol,
+html[data-theme='light'] .hlcode-wrapper .hljs-bullet {
+  color: #116329;
+}
+
+html[data-theme='light'] .hlcode-wrapper .hljs-title,
+html[data-theme='light'] .hlcode-wrapper .hljs-section,
+html[data-theme='light'] .hlcode-wrapper .hljs-name {
+  color: #8250df;
+}
+
+html[data-theme='light'] .hlcode-wrapper .hljs-number,
+html[data-theme='light'] .hlcode-wrapper .hljs-literal,
+html[data-theme='light'] .hlcode-wrapper .hljs-variable {
+  color: #0550ae;
+}

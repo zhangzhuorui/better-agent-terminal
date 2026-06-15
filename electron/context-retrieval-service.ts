@@ -4,6 +4,8 @@ import type { ContextModuleSettings } from '../src/types'
 import { getCache, makeStableCacheKey, setCache } from './context-cache'
 import { getOrBuildContextPackageIndex } from './context-package-index'
 import { recommendLocalContext } from './local-context-retriever'
+import { classifyIntent, scoreByIntent } from './intent-classifier'
+import { getUserPreferences, refreshCache } from './user-preference-learn'
 
 function normalizeQuery(text: string): string[] {
   const tokens = text
@@ -34,6 +36,8 @@ export async function recommendContextPackages(options: ContextRetrievalOptions)
   if (cached) return { recommendations: cached, cacheHit: true }
 
   const tokens = normalizeQuery(prompt)
+  const intent = classifyIntent(prompt)
+  await refreshCache()
   const excluded = new Set(options.excludePackageIds ?? [])
   const index = await getOrBuildContextPackageIndex()
   const packageRecommendations = index
@@ -78,6 +82,16 @@ export async function recommendContextPackages(options: ContextRetrievalOptions)
       }
       const ageDays = Math.max(0, (Date.now() - entry.updatedAt) / 86400000)
       score += Math.max(0, 0.04 - ageDays * 0.002)
+      const intentBoost = scoreByIntent(intent, metadata)
+      if (intentBoost.boost > 0) {
+        score += intentBoost.boost
+        reasons.push(...intentBoost.reasons)
+      }
+      const pref = getUserPreferences(entry.packageId, intent)
+      if (pref.boost > 0) {
+        score += pref.boost
+        if (pref.reason) reasons.push(pref.reason)
+      }
       return {
         packageId: entry.packageId,
         name,

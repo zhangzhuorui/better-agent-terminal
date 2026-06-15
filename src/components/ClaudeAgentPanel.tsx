@@ -11,6 +11,7 @@ import type { Workspace } from '../types'
 import { LinkedText, FilePreviewModal } from './PathLinker'
 import { ContextPackagePickerPopover } from './ContextPackagePickerPopover'
 import { ContentSearchPanel } from './ContentSearchPanel'
+import { ContextDock } from './ContextDock'
 
 interface SessionMeta {
   model?: string
@@ -322,6 +323,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
   const isNearBottomRef = useRef(true)
   const [aboveViewportUserMsgIds, setAboveViewportUserMsgIds] = useState<Set<string>>(new Set())
   const [claudeFontSize, setClaudeFontSize] = useState(settingsStore.getSettings().fontSize)
+  const [contextTokenBudget, setContextTokenBudget] = useState(settingsStore.getSettings().contextModule.contextTokenBudget)
   const userMsgRefsMap = useRef<Map<string, HTMLDivElement>>(new Map())
   const observerRef = useRef<IntersectionObserver | null>(null)
 
@@ -1106,7 +1108,9 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
   // Subscribe to settings changes (font size, statusline config)
   useEffect(() => {
     return settingsStore.subscribe(() => {
-      setClaudeFontSize(settingsStore.getSettings().fontSize)
+      const settings = settingsStore.getSettings()
+      setClaudeFontSize(settings.fontSize)
+      setContextTokenBudget(settings.contextModule.contextTokenBudget)
       setStatuslineConfig(settingsStore.getStatuslineItems())
     })
   }, [])
@@ -3056,93 +3060,32 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
       {/* Input area — hidden when permission card, ask-user card, or resume/model list is visible */}
       {!pendingPermission && !pendingQuestion && !showResumeList && !showModelList && (
       <div className={`claude-input-area${isDragOver ? ' drag-over' : ''}`}>
-        <div className="claude-context-pkgs" ref={contextPkgBrowseRef}>
-          <span className="claude-context-pkgs-label" title={t('claude.contextPackagesHint')}>
-            {t('claude.contextPackages')}
-          </span>
-          <div className="claude-context-pkgs-chips">
-            {attachedPkgIds.length === 0 ? (
-              <span className="claude-context-pkgs-empty">{t('claude.contextPackagesNoneAttached')}</span>
-            ) : (
-              attachedPkgIds.map(id => {
-                const p = availableContextPkgs.find(x => x.id === id)
-                if (!p) {
-                  return (
-                    <span key={id} className="claude-context-pkg-chip claude-context-pkg-chip--missing">
-                      {id.slice(0, 8)}…
-                      <button
-                        type="button"
-                        className="claude-context-pkg-chip-remove"
-                        aria-label={t('common.close')}
-                        onClick={() => removeAttachedContextPackage(id)}
-                      >
-                        ×
-                      </button>
-                    </span>
-                  )
-                }
-                return (
-                  <span key={id} className="claude-context-pkg-chip" title={p.description || p.name}>
-                    <span className="claude-context-pkg-chip-name">{p.name}</span>
-                    <button
-                      type="button"
-                      className="claude-context-pkg-chip-remove"
-                      aria-label={t('common.close')}
-                      onClick={() => removeAttachedContextPackage(id)}
-                    >
-                      ×
-                    </button>
-                  </span>
-                )
-              })
-            )}
-          </div>
-          <div className="claude-context-pkgs-trailing">
-            <button
-              type="button"
-              className="claude-context-pkgs-browse"
-              onClick={() => setContextPkgPickerOpen(o => !o)}
-            >
-              {t('claude.contextPackagesBrowse')}
-            </button>
-            <button
-              type="button"
-              className={`claude-context-pkgs-pick${contextPickMode ? ' active' : ''}`}
-              title={contextPickMode ? t('claude.contextPickModeActive') : t('claude.contextPickMode')}
-              aria-pressed={contextPickMode}
-              onClick={() => {
-                if (contextPickMode) {
-                  setContextPickMode(false)
-                  setContextPickedSegmentKeys([])
-                } else {
-                  setContextPkgPickerOpen(false)
-                  setContextPickMode(true)
-                }
-              }}
-            >
-              {contextPickMode ? t('claude.contextPickModeActive') : t('claude.contextPickMode')}
-            </button>
-            <button
-              type="button"
-              className="claude-context-pkgs-refresh"
-              onClick={() => refreshContextPackages()}
-            >
-              {t('claude.contextPackagesRefresh')}
-            </button>
-            <button
-              type="button"
-              className={`claude-context-pkgs-search${showSearchPanel ? ' active' : ''}`}
-              title={t('contentSearch.placeholder')}
-              onClick={() => setShowSearchPanel(o => !o)}
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <circle cx="11" cy="11" r="8" />
-                <line x1="21" y1="21" x2="16.65" y2="16.65" />
-              </svg>
-              {t('contentSearch.messages')}
-            </button>
-          </div>
-        </div>
+        <ContextDock
+          anchorRef={contextPkgBrowseRef}
+          packages={availableContextPkgs}
+          attachedPackageIds={attachedPkgIds}
+          recommendations={contextRecommendations}
+          lastPlan={lastContextPlan}
+          tokenBudget={contextTokenBudget}
+          isStreaming={isStreaming}
+          pickerOpen={contextPkgPickerOpen}
+          pickMode={contextPickMode}
+          searchOpen={showSearchPanel}
+          onOpenPicker={() => setContextPkgPickerOpen(o => !o)}
+          onRefresh={refreshContextPackages}
+          onTogglePickMode={() => {
+            if (contextPickMode) {
+              setContextPickMode(false)
+              setContextPickedSegmentKeys([])
+            } else {
+              setContextPkgPickerOpen(false)
+              setContextPickMode(true)
+            }
+          }}
+          onToggleSearch={() => setShowSearchPanel(o => !o)}
+          onAddRecommendation={addRecommendedContextPackage}
+          onRemovePackage={removeAttachedContextPackage}
+        />
         <ContextPackagePickerPopover
           open={contextPkgPickerOpen}
           anchorRef={contextPkgBrowseRef}
@@ -3154,35 +3097,6 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
           onClose={() => setContextPkgPickerOpen(false)}
           onApply={ids => workspaceStore.setTerminalContextPackages(sessionId, ids)}
         />
-        {contextRecommendations.length > 0 && !isStreaming && (
-          <div className="claude-context-recommendations">
-            <span className="claude-context-recommendations-label">{t('claude.contextRecommendations')}</span>
-            {contextRecommendations.map(rec => (
-              <button
-                key={rec.packageId}
-                type="button"
-                className="claude-context-recommendation-chip"
-                title={`${rec.reasons.join(', ')} · ${rec.tokenEstimate ?? 0} tokens`}
-                onClick={() => addRecommendedContextPackage(rec.packageId)}
-              >
-                <span>{rec.name}</span>
-                <span>{Math.round(rec.score * 100)}%</span>
-                <span>{t('claude.contextRecommendationAdd')}</span>
-              </button>
-            ))}
-          </div>
-        )}
-        {lastContextPlan && (
-          <div className="claude-context-plan-note">
-            {t('claude.contextPlanNote', {
-              mode: lastContextPlan.mode,
-              explicit: lastContextPlan.explicitPackageIds.length,
-              rule: lastContextPlan.rulePackageIds.length,
-              auto: lastContextPlan.recommendedPackageIds.length,
-              tokens: lastContextPlan.estimatedTokens,
-            })}
-          </div>
-        )}
         {/* Prompt suggestion chip */}
         {promptSuggestion && !isStreaming && (
           <div className="claude-prompt-suggestion" onClick={() => {
