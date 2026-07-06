@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { v4 as uuidv4 } from 'uuid'
 import type {
   ContextPackage,
+  ContextManagerAgentPlan,
   PlatformAnalyticsSummary,
   AutomationJob,
   AutomationPermissionMode,
@@ -19,7 +20,7 @@ import { McpPanel } from './McpPanel'
 import { WorkflowPanel } from './WorkflowPanel'
 
 type TabId = 'dashboard' | 'context' | 'automation' | 'mcp' | 'workflow'
-type ContextPaneId = 'library' | 'create'
+type ContextPaneId = 'library' | 'create' | 'manager'
 
 interface PlatformHubPanelProps {
   onClose: () => void
@@ -71,6 +72,7 @@ export function PlatformHubPanel({ onClose }: PlatformHubPanelProps) {
   const [libSearch, setLibSearch] = useState('')
   const [libExpanded, setLibExpanded] = useState<Set<string>>(() => new Set())
   const [libSelectedId, setLibSelectedId] = useState<string | null>(null)
+  const [managerPlan, setManagerPlan] = useState<(ContextManagerAgentPlan & { at: number; sessionId: string }) | null>(null)
   const [codeburnPeriod, setCodeburnPeriod] = useState<CodeburnPeriod>('week')
 
   const { state: codeburnState, refresh: refreshCodeburn } = useCodeburnReport(codeburnPeriod)
@@ -104,6 +106,14 @@ export function PlatformHubPanel({ onClose }: PlatformHubPanelProps) {
       const st = workspaceStore.getState()
       setTerminals(st.terminals)
       setWorkspaces(st.workspaces)
+    })
+  }, [])
+
+  useEffect(() => {
+    return window.electronAPI.contextManagerAgent.onPlan((sessionId: string, plan: unknown) => {
+      if (plan && typeof plan === 'object') {
+        setManagerPlan({ ...(plan as ContextManagerAgentPlan), at: Date.now(), sessionId })
+      }
     })
   }, [])
 
@@ -394,6 +404,13 @@ export function PlatformHubPanel({ onClose }: PlatformHubPanelProps) {
                 >
                   {t('platform.context.tabCreate')}
                 </button>
+                <button
+                  type="button"
+                  className={contextPane === 'manager' ? 'active' : ''}
+                  onClick={() => setContextPane('manager')}
+                >
+                  {t('platform.context.tabManager')}
+                </button>
               </div>
 
               {contextPane === 'create' && (
@@ -459,6 +476,34 @@ export function PlatformHubPanel({ onClose }: PlatformHubPanelProps) {
                       </button>
                     )}
                   </div>
+                </div>
+              )}
+
+              {contextPane === 'manager' && (
+                <div className="platform-context-manager platform-card">
+                  <h3 className="platform-subhead">{t('platform.context.tabManager')}</h3>
+                  {!managerPlan ? (
+                    <p className="platform-muted">{t('platform.context.managerEmpty')}</p>
+                  ) : (
+                    <div className="platform-manager-plan">
+                      <div className="platform-manager-meta">
+                        {t('platform.context.managerSession')}: {managerPlan.sessionId.slice(0, 8)}
+                      </div>
+                      {managerPlan.reasoning && (
+                        <div className="platform-manager-reasoning">
+                          <strong>{t('platform.context.managerReasoning')}</strong>
+                          <pre>{managerPlan.reasoning}</pre>
+                        </div>
+                      )}
+                      <div className="platform-manager-stats">
+                        <span>{t('platform.context.managerExplicit')}: {managerPlan.explicitPackageIds.length}</span>
+                        <span>{t('platform.context.managerRecommended')}: {managerPlan.recommendedPackageIds.length}</span>
+                        <span>{t('platform.context.managerCreated')}: {(managerPlan.createdPackageIds ?? managerPlan.createdPackages ?? []).length}</span>
+                        <span>{t('platform.context.managerUpdated')}: {(managerPlan.updatedPackageIds ?? managerPlan.updatedPackages ?? []).length}</span>
+                        <span>{t('platform.context.managerMemory')}: {(managerPlan.memoryEntries ?? []).length}</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 

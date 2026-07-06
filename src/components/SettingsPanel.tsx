@@ -145,6 +145,8 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
   // Settings tabs
   const [activeTab, setActiveTab] = useState<'general' | 'agents' | 'context'>('general')
   const [contextCacheStats, setContextCacheStats] = useState<{ hit: number; miss: number; size: number; lastClearedAt: number } | null>(null)
+  const [maintenanceResult, setMaintenanceResult] = useState<{ archived: number; merged: number; deleted: number; memoryPruned: number } | null>(null)
+  const [maintenanceRunning, setMaintenanceRunning] = useState(false)
 
   // Agent local config detection
   const [agentChecks, setAgentChecks] = useState<Record<string, { installed: boolean; envReady: boolean; missingEnvVars: string[]; version?: string }>>({})
@@ -812,9 +814,13 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
               </div>
               {[
                 ['compressionEnabled', 'settings.contextCompression'],
+                ['structuredCompressionEnabled', 'settings.contextStructuredCompression'],
+                ['retrieveIdCompressionEnabled', 'settings.contextRetrieveIdCompression'],
                 ['summarizeOnSave', 'settings.contextSummarizeOnSave'],
                 ['cacheEnabled', 'settings.contextCacheEnabled'],
                 ['includeLocalFiles', 'settings.contextIncludeLocalFiles'],
+                ['contextManagerAgentEnabled', 'settings.contextManagerAgent'],
+                ['autoMemoryEnabled', 'settings.contextAutoMemory'],
               ].map(([key, label]) => (
                 <div key={key} className="settings-group checkbox-group">
                   <label>
@@ -827,6 +833,27 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                   </label>
                 </div>
               ))}
+              {settings.contextModule.contextManagerAgentEnabled && (
+                <div className="settings-group">
+                  <label>{t('settings.contextManagerAgentModel')}</label>
+                  <input
+                    type="text"
+                    value={settings.contextModule.contextManagerAgentModel || ''}
+                    placeholder="claude-sonnet-4-6"
+                    onChange={e => settingsStore.setContextModuleSettings({ contextManagerAgentModel: e.target.value })}
+                  />
+                </div>
+              )}
+              <div className="settings-group">
+                <label>{t('settings.contextMemoryDecayDays', { days: settings.contextModule.memoryDecayDays })}</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={365}
+                  value={settings.contextModule.memoryDecayDays}
+                  onChange={e => settingsStore.setContextModuleSettings({ memoryDecayDays: Number(e.target.value) || 30 })}
+                />
+              </div>
               <div className="settings-group">
                 <label>{t('settings.contextCacheStats')}</label>
                 <p className="settings-hint">
@@ -838,6 +865,41 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                   onClick={() => window.electronAPI.contextRetrieval.clearCache().then(() => window.electronAPI.contextRetrieval.cacheStats()).then(setContextCacheStats)}
                 >
                   {t('settings.contextClearCache')}
+                </button>
+              </div>
+              <div className="settings-group">
+                <label>{t('settings.contextMaintenance')}</label>
+                <p className="settings-hint">
+                  {maintenanceResult
+                    ? t('settings.contextMaintenanceResult', {
+                        archived: maintenanceResult.archived,
+                        merged: maintenanceResult.merged,
+                        deleted: maintenanceResult.deleted,
+                        memoryPruned: maintenanceResult.memoryPruned,
+                      })
+                    : t('settings.contextMaintenanceHint')}
+                </p>
+                <button
+                  type="button"
+                  className="settings-save-btn"
+                  disabled={maintenanceRunning}
+                  onClick={() => {
+                    setMaintenanceRunning(true)
+                    window.electronAPI.contextMaintenance
+                      .run({ staleDays: settings.contextModule.memoryDecayDays * 3 })
+                      .then((report) => {
+                        setMaintenanceResult({
+                          archived: report.archivedPackages.length,
+                          merged: report.mergedPackages.length,
+                          deleted: report.deletedPackages.length,
+                          memoryPruned: report.prunedMemoryEntries,
+                        })
+                      })
+                      .catch(() => setMaintenanceResult(null))
+                      .finally(() => setMaintenanceRunning(false))
+                  }}
+                >
+                  {maintenanceRunning ? t('settings.contextMaintenanceRunning') : t('settings.contextMaintenanceRun')}
                 </button>
               </div>
             </div>

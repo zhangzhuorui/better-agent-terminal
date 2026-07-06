@@ -175,6 +175,11 @@ export function McpPanel() {
               <div>
                 <strong>{s.name}</strong>
                 <span className="platform-muted"> · {s.transport} · {s.enabled ? t('platform.mcp.enabled') : t('common.cancel')}</span>
+                {s.id === 'builtin-context' && (
+                  <div className="platform-muted platform-job-meta">
+                    {t('platform.mcp.builtinTools')}: context_package_list, context_package_get, context_package_search, context_retrieval_plan, context_memory_search, context_compress
+                  </div>
+                )}
                 {s.lastHealthCheck && (
                   <div className="platform-muted platform-job-meta">
                     {t('platform.mcp.lastChecked')}: {new Date(s.lastHealthCheck.checkedAt).toLocaleString()} — {s.lastHealthCheck.ok ? t('platform.mcp.healthOk') : `${t('platform.mcp.healthFail')}: ${s.lastHealthCheck.error}`}
@@ -185,12 +190,16 @@ export function McpPanel() {
                 <button type="button" className="settings-save-btn" onClick={() => void runHealth(s.id)}>
                   {t('platform.mcp.healthCheck')}
                 </button>
-                <button type="button" className="settings-cancel-btn" onClick={() => openEdit(s)}>
-                  {t('platform.mcp.edit')}
-                </button>
-                <button type="button" className="settings-danger-btn" onClick={() => void handleDelete(s.id)}>
-                  {t('common.delete')}
-                </button>
+                {s.id !== 'builtin-context' && (
+                  <>
+                    <button type="button" className="settings-cancel-btn" onClick={() => openEdit(s)}>
+                      {t('platform.mcp.edit')}
+                    </button>
+                    <button type="button" className="settings-danger-btn" onClick={() => void handleDelete(s.id)}>
+                      {t('common.delete')}
+                    </button>
+                  </>
+                )}
               </div>
             </li>
           ))}

@@ -4,6 +4,12 @@ import * as path from 'path'
 import { randomUUID } from 'crypto'
 import { logger } from './logger'
 import type { McpServerConfig, McpToolInfo } from '../src/types/platform-extensions'
+import {
+  BUILTIN_CONTEXT_SERVER_ID,
+  builtinContextServerConfig,
+  callContextMcpTool,
+  getContextMcpTools,
+} from './context-mcp-server'
 
 const FILE = 'mcp-servers.json'
 
@@ -38,15 +44,20 @@ async function writeFile(data: FileShape): Promise<void> {
 
 export async function listMcpServers(): Promise<McpServerConfig[]> {
   const f = await readFile()
-  return f.servers.slice().sort((a, b) => b.updatedAt - a.updatedAt)
+  const hasBuiltin = f.servers.some(s => s.id === BUILTIN_CONTEXT_SERVER_ID)
+  const servers = f.servers.slice()
+  if (!hasBuiltin) servers.unshift(builtinContextServerConfig())
+  return servers.sort((a, b) => b.updatedAt - a.updatedAt)
 }
 
 export async function getMcpServer(id: string): Promise<McpServerConfig | null> {
+  if (id === BUILTIN_CONTEXT_SERVER_ID) return builtinContextServerConfig()
   const f = await readFile()
   return f.servers.find(s => s.id === id) ?? null
 }
 
 export async function createMcpServer(input: Omit<McpServerConfig, 'id' | 'createdAt' | 'updatedAt'>): Promise<McpServerConfig> {
+  if ((input as McpServerConfig).id === BUILTIN_CONTEXT_SERVER_ID) throw new Error('Cannot create the built-in context server')
   const now = Date.now()
   const server: McpServerConfig = {
     id: randomUUID(),
@@ -62,6 +73,7 @@ export async function createMcpServer(input: Omit<McpServerConfig, 'id' | 'creat
 }
 
 export async function updateMcpServer(id: string, updates: Partial<Omit<McpServerConfig, 'id' | 'createdAt'>>): Promise<McpServerConfig | null> {
+  if (id === BUILTIN_CONTEXT_SERVER_ID) return builtinContextServerConfig()
   const f = await readFile()
   const idx = f.servers.findIndex(s => s.id === id)
   if (idx === -1) return null
@@ -73,6 +85,7 @@ export async function updateMcpServer(id: string, updates: Partial<Omit<McpServe
 }
 
 export async function deleteMcpServer(id: string): Promise<boolean> {
+  if (id === BUILTIN_CONTEXT_SERVER_ID) return false
   const f = await readFile()
   const len = f.servers.length
   f.servers = f.servers.filter(s => s.id !== id)
@@ -84,6 +97,7 @@ export async function deleteMcpServer(id: string): Promise<boolean> {
 export async function healthCheckMcpServer(id: string): Promise<{ ok: boolean; error?: string }> {
   const server = await getMcpServer(id)
   if (!server) return { ok: false, error: 'Server not found' }
+  if (id === BUILTIN_CONTEXT_SERVER_ID) return { ok: true }
   if (!server.enabled) return { ok: false, error: 'Server is disabled' }
 
   // For stdio transport, try to spawn and immediately kill to verify binary exists
@@ -177,6 +191,9 @@ export async function callMcpTool(
   const server = await getMcpServer(serverId)
   if (!server) return { ok: false, error: 'Server not found' }
   if (!server.enabled) return { ok: false, error: 'Server is disabled' }
+  if (serverId === BUILTIN_CONTEXT_SERVER_ID) {
+    return callContextMcpTool(toolName, toolInput)
+  }
   if (server.transport !== 'stdio') {
     return { ok: false, error: `Transport ${server.transport} not yet supported for tool calls` }
   }

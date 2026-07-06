@@ -1,6 +1,6 @@
 import type { AppSettings, ShellType, FontType, ColorPresetId, EnvVariable, AgentCommandType, StatuslineItemConfig, StatuslineItemId, LanguageCode, UiThemePreference, AgentConfig, ContextModuleSettings } from '../types'
 import type { AgentPresetId } from '../types/agent-presets'
-import { FONT_OPTIONS, COLOR_PRESETS, AGENT_COMMAND_OPTIONS, STATUSLINE_ITEMS } from '../types'
+import { FONT_OPTIONS, COLOR_PRESETS, AGENT_COMMAND_OPTIONS, STATUSLINE_ITEMS, defaultContextModuleSettings } from '../types'
 import { detectBrowserLanguage } from '../i18n'
 import { applyUiTheme } from '../utils/apply-ui-theme'
 
@@ -10,19 +10,6 @@ const isWindows = typeof navigator !== 'undefined' && navigator.userAgent.includ
 
 function defaultLanguage(): LanguageCode {
   return detectBrowserLanguage()
-}
-
-function defaultContextModuleSettings(): ContextModuleSettings {
-  return {
-    autoRetrievalMode: 'recommend',
-    autoInjectMaxPackages: 3,
-    autoInjectMinScore: 0.72,
-    contextTokenBudget: 12000,
-    compressionEnabled: true,
-    summarizeOnSave: true,
-    cacheEnabled: true,
-    includeLocalFiles: false,
-  }
 }
 
 function defaultAgentConfigs(): Record<AgentPresetId, AgentConfig> {
@@ -59,7 +46,7 @@ const defaultSettings: AppSettings = {
   allowBypassPermissions: true,
   enable1MContext: false,
   agentConfigs: defaultAgentConfigs(),
-  contextModule: defaultContextModuleSettings(),
+  contextModule: defaultContextModuleSettings,
 }
 
 class SettingsStore {
@@ -354,13 +341,13 @@ class SettingsStore {
         this.settings = {
           ...defaultSettings,
           ...parsed,
-          contextModule: { ...defaultContextModuleSettings(), ...parsed.contextModule },
+          contextModule: { ...defaultContextModuleSettings, ...parsed.contextModule },
           agentConfigs: { ...defaultAgentConfigs(), ...parsed.agentConfigs },
         }
         applyUiTheme(this.settings.theme)
         this.notify()
       } catch (e) {
-        console.error('Failed to parse settings:', e)
+        window.electronAPI.debug.log('Failed to parse settings:', e)
       }
     }
   }

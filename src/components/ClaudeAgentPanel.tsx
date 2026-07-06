@@ -7,7 +7,7 @@ import { settingsStore } from '../stores/settings-store'
 import { workspaceStore } from '../stores/workspace-store'
 import type { AgentPresetId } from '../types/agent-presets'
 import type { ContextInjectionPlan, ContextPackage, ContextRecommendation } from '../types/platform-extensions'
-import type { Workspace } from '../types'
+import type { TerminalInstance, Workspace } from '../types'
 import { LinkedText, FilePreviewModal } from './PathLinker'
 import { ContextPackagePickerPopover } from './ContextPackagePickerPopover'
 import { ContentSearchPanel } from './ContentSearchPanel'
@@ -75,6 +75,8 @@ interface ClaudeAgentPanelProps {
   cwd: string
   isActive: boolean
   workspaceId?: string
+  endSummaryRequest?: { nonce: number; reason: 'close' } | null
+  onEndSummaryRequestDone?: (sessionId: string, action: 'close' | 'cancel') => void
 }
 
 interface AttachedImage {
@@ -84,10 +86,74 @@ interface AttachedImage {
 
 type MessageItem = ClaudeMessage | ClaudeToolCall
 
+type AutoContextReason = 'idle' | 'return' | 'close'
+
+interface AutoContextStage {
+  fingerprint: string
+  messages: Array<{ role: 'user' | 'assistant'; content: string; timestamp?: number }>
+  messageCount: number
+}
+
+type AutoContextModal =
+  | { mode: 'ask'; reason: AutoContextReason; stage: AutoContextStage; closeNonce?: number }
+  | { mode: 'generating'; reason: AutoContextReason; stage: AutoContextStage; closeNonce?: number; error?: string }
+  | { mode: 'confirm'; reason: AutoContextReason; stage: AutoContextStage; closeNonce?: number; name: string; description: string; tags: string; content: string; attach: boolean; saving: boolean; err: string | null; source: 'llm' | 'heuristic' }
+
 // Track sessions that have been started to prevent duplicate calls across StrictMode remounts
 const startedSessions = new Set<string>()
 
 const LARGE_SELECTION_CHARS = 200_000
+const AUTO_CONTEXT_IDLE_MS = 30 * 60 * 1000
+
+function getTopLevelConversationMessages(items: MessageItem[]): Array<{ role: 'user' | 'assistant'; content: string; timestamp?: number }> {
+  return items
+    .filter((item): item is ClaudeMessage => !isToolCall(item))
+    .filter(msg => !msg.parentToolUseId && (msg.role === 'user' || msg.role === 'assistant') && Boolean((msg.content || '').trim()))
+    .map(msg => ({ role: msg.role as 'user' | 'assistant', content: msg.content.trim(), timestamp: msg.timestamp }))
+}
+
+function simpleHash(text: string): string {
+  let hash = 2166136261
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i)
+    hash = Math.imul(hash, 16777619)
+  }
+  return (hash >>> 0).toString(36)
+}
+
+function buildConversationStage(items: MessageItem[], sdkSessionId?: string): AutoContextStage | null {
+  const conversation = getTopLevelConversationMessages(items)
+  const users = conversation.filter(m => m.role === 'user')
+  const assistants = conversation.filter(m => m.role === 'assistant')
+  if (users.length === 0 || assistants.length === 0) return null
+  const firstTs = conversation[0]?.timestamp ?? 0
+  const lastTs = conversation[conversation.length - 1]?.timestamp ?? 0
+  const recentSignal = conversation.slice(-4).map(m => `${m.role}:${m.content.length}:${simpleHash(m.content.slice(0, 400))}`).join('|')
+  const fingerprint = simpleHash([
+    sdkSessionId || 'no-sdk-session',
+    conversation.length,
+    users.length,
+    assistants.length,
+    firstTs,
+    lastTs,
+    recentSignal,
+  ].join('|'))
+  return { fingerprint, messages: conversation, messageCount: conversation.length }
+}
+
+function shouldOfferAutoContextSave(params: {
+  stage: AutoContextStage | null
+  terminalContext?: TerminalInstance['conversationContext']
+  isStreaming: boolean
+  pendingPermission: PendingPermission | null
+  pendingQuestion: PendingAskUser | null
+  modalOpen: boolean
+}): params is typeof params & { stage: AutoContextStage } {
+  if (!params.stage) return false
+  if (params.isStreaming || params.pendingPermission || params.pendingQuestion || params.modalOpen) return false
+  const ctx = params.terminalContext
+  return params.stage.fingerprint !== ctx?.lastStageFingerprint && params.stage.fingerprint !== ctx?.lastDismissedStageFingerprint
+}
 
 function isAllowedChatSelectionContent(el: Element): boolean {
   return (
@@ -203,7 +269,14 @@ function userBubbleCoreText(content: string): string {
     .replace(/\n\[\d+ images? attached\]/g, '')
 }
 
-export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Readonly<ClaudeAgentPanelProps>) {
+export function ClaudeAgentPanel({
+  sessionId,
+  cwd,
+  isActive,
+  workspaceId,
+  endSummaryRequest,
+  onEndSummaryRequestDone,
+}: Readonly<ClaudeAgentPanelProps>) {
   const { t } = useTranslation()
   const [messages, setMessages] = useState<MessageItem[]>([])
   const inputValueRef = useRef('')
@@ -292,6 +365,12 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
     saving: boolean
     err: string | null
   } | null>(null)
+  const [autoContextModal, setAutoContextModal] = useState<AutoContextModal | null>(null)
+  const idleContextTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const lastTurnCompletedAtRef = useRef<number | null>(null)
+  const isActiveRef = useRef(isActive)
+  const wasActiveRef = useRef(isActive)
+  const handledCloseSummaryNonceRef = useRef<number | null>(null)
   const [contextPickMode, setContextPickMode] = useState(false)
   const [contextPickedSegmentKeys, setContextPickedSegmentKeys] = useState<string[]>([])
   const [workspaces, setWorkspaces] = useState<Workspace[]>(() => workspaceStore.getState().workspaces)
@@ -439,8 +518,19 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
     (id: string) => {
       if (attachedPkgIds.includes(id)) return
       workspaceStore.setTerminalContextPackages(sessionId, [...attachedPkgIds, id])
+      // If the attached package came from a recommendation, record positive feedback.
+      if (contextRecommendations.some(r => r.packageId === id)) {
+        const lastUser = [...allMessagesRef.current]
+          .reverse()
+          .filter((m): m is ClaudeMessage => !isToolCall(m))
+          .find(m => m.role === 'user')
+        const prompt = lastUser?.content?.slice(0, 500) || ''
+        if (prompt) {
+          window.electronAPI.contextRetrieval.recordUserSelection(id, prompt).catch(() => {})
+        }
+      }
     },
-    [attachedPkgIds, sessionId]
+    [attachedPkgIds, contextRecommendations, sessionId]
   )
 
   const removeAttachedContextPackage = useCallback(
@@ -449,8 +539,19 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
         sessionId,
         attachedPkgIds.filter(x => x !== id)
       )
+      // If the removed package came from a recommendation, record negative feedback.
+      if (contextRecommendations.some(r => r.packageId === id)) {
+        const lastUser = [...allMessagesRef.current]
+          .reverse()
+          .filter((m): m is ClaudeMessage => !isToolCall(m))
+          .find(m => m.role === 'user')
+        const prompt = lastUser?.content?.slice(0, 500) || ''
+        if (prompt) {
+          window.electronAPI.contextRetrieval.recordNegativeFeedback(id, prompt).catch(() => {})
+        }
+      }
     },
-    [attachedPkgIds, sessionId]
+    [attachedPkgIds, contextRecommendations, sessionId]
   )
 
   const defaultPackageWorkspaceRoot = useMemo(() => {
@@ -460,6 +561,168 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
     const path = (ws?.folderPath || cwd || '').trim()
     return path || undefined
   }, [workspaceId, sessionId, cwd, workspaces])
+
+  const finishEndSummaryRequest = useCallback(
+    (action: 'close' | 'cancel') => {
+      const closeNonce = autoContextModalRef.current?.closeNonce
+      setAutoContextModal(null)
+      if (closeNonce !== undefined) handledCloseSummaryNonceRef.current = closeNonce
+      onEndSummaryRequestDone?.(sessionId, action)
+    },
+    [onEndSummaryRequestDone, sessionId]
+  )
+
+  const maybeOpenAutoContextPrompt = useCallback(
+    (reason: AutoContextReason, closeNonce?: number): boolean => {
+      const terminal = workspaceStore.getState().terminals.find(t => t.id === sessionId)
+      const sdkSessionId = sessionMetaRef.current?.sdkSessionId || terminal?.sdkSessionId
+      const stage = buildConversationStage(allMessagesRef.current, sdkSessionId)
+      const ok = shouldOfferAutoContextSave({
+        stage,
+        terminalContext: terminal?.conversationContext,
+        isStreaming: isStreamingRef.current,
+        pendingPermission: pendingPermissionRef.current,
+        pendingQuestion: pendingQuestionRef.current,
+        modalOpen: !!autoContextModalRef.current,
+      })
+      if (!ok) return false
+      setAutoContextModal({ mode: 'ask', reason, stage, closeNonce })
+      window.electronAPI.debug.log(`[renderer] auto context prompt reason=${reason} stage=${stage.fingerprint}`)
+      return true
+    },
+    [sessionId]
+  )
+
+  const scheduleAutoContextIdlePrompt = useCallback(() => {
+    if (idleContextTimerRef.current) clearTimeout(idleContextTimerRef.current)
+    idleContextTimerRef.current = setTimeout(() => {
+      idleContextTimerRef.current = null
+      if (isActiveRef.current) maybeOpenAutoContextPrompt('idle')
+    }, AUTO_CONTEXT_IDLE_MS)
+  }, [maybeOpenAutoContextPrompt])
+
+  const updateConversationContextState = useCallback(
+    (updates: NonNullable<TerminalInstance['conversationContext']>) => {
+      const terminal = workspaceStore.getState().terminals.find(t => t.id === sessionId)
+      workspaceStore.setTerminalConversationContext(sessionId, {
+        ...(terminal?.conversationContext ?? {}),
+        ...updates,
+      })
+    },
+    [sessionId]
+  )
+
+  const generateAutoContextSummary = useCallback(
+    async (modal: Extract<AutoContextModal, { mode: 'ask' | 'generating' }>) => {
+      setAutoContextModal({ mode: 'generating', reason: modal.reason, stage: modal.stage, closeNonce: modal.closeNonce })
+      try {
+        const draft = await window.electronAPI.claude.summarizeContext({
+          sessionId,
+          cwd,
+          sdkSessionId: sessionMetaRef.current?.sdkSessionId,
+          messages: modal.stage.messages,
+        })
+        setAutoContextModal({
+          mode: 'confirm',
+          reason: modal.reason,
+          stage: modal.stage,
+          closeNonce: modal.closeNonce,
+          name: draft.name,
+          description: draft.description || '',
+          tags: draft.tags?.join(', ') || 'conversation, auto-summary',
+          content: draft.content,
+          attach: true,
+          saving: false,
+          err: null,
+          source: draft.source,
+        })
+      } catch (err) {
+        window.electronAPI.debug.log(`[renderer] auto context summarize error: ${String(err)}`)
+        setAutoContextModal({ mode: 'generating', reason: modal.reason, stage: modal.stage, closeNonce: modal.closeNonce, error: t('claude.autoContextGenerateFailed') })
+      }
+    },
+    [cwd, sessionId, t]
+  )
+
+  const dismissAutoContextStage = useCallback(
+    (modal: AutoContextModal) => {
+      updateConversationContextState({
+        sdkSessionId: sessionMetaRef.current?.sdkSessionId,
+        lastDismissedStageFingerprint: modal.stage.fingerprint,
+        lastDismissedAt: Date.now(),
+      })
+      window.electronAPI.debug.log(`[renderer] auto context dismissed stage=${modal.stage.fingerprint}`)
+      if (modal.reason === 'close') finishEndSummaryRequest('close')
+      else setAutoContextModal(null)
+    },
+    [finishEndSummaryRequest, updateConversationContextState]
+  )
+
+  const saveAutoContextSummary = useCallback(async () => {
+    const modal = autoContextModalRef.current
+    if (!modal || modal.mode !== 'confirm' || modal.saving) return
+    if (!modal.name.trim()) {
+      setAutoContextModal({ ...modal, err: t('claude.selectionNameRequired') })
+      return
+    }
+    setAutoContextModal({ ...modal, saving: true, err: null })
+    try {
+      const c = (await window.electronAPI.contextPackage.create({
+        name: modal.name.trim(),
+        description: modal.description.trim() || undefined,
+        content: modal.content,
+        tags: modal.tags
+          ? modal.tags.split(/[,，]/).map(s => s.trim()).filter(Boolean)
+          : undefined,
+        workspaceRoot: defaultPackageWorkspaceRoot,
+      })) as ContextPackage | null
+      if (!c?.id) {
+        setAutoContextModal({ ...modal, saving: false, err: t('claude.autoContextSaveFailed') })
+        return
+      }
+      refreshContextPackages()
+      if (modal.attach) {
+        const term = workspaceStore.getState().terminals.find(t => t.id === sessionId)
+        const existing = term?.contextPackageIds ?? []
+        const next = existing.includes(c.id) ? existing : [...existing, c.id]
+        workspaceStore.setTerminalContextPackages(sessionId, next)
+      }
+      updateConversationContextState({
+        sdkSessionId: sessionMetaRef.current?.sdkSessionId,
+        lastStageFingerprint: modal.stage.fingerprint,
+        lastSavedMessageCount: modal.stage.messageCount,
+        lastSavedAt: Date.now(),
+        lastSavedPackageId: c.id,
+      })
+      window.electronAPI.debug.log(`[renderer] auto context package saved: ${c.id} "${c.name}" stage=${modal.stage.fingerprint}`)
+      if (modal.reason === 'close') finishEndSummaryRequest('close')
+      else setAutoContextModal(null)
+    } catch (err) {
+      window.electronAPI.debug.log(`[renderer] auto context save error: ${String(err)}`)
+      setAutoContextModal({ ...modal, saving: false, err: t('claude.autoContextSaveFailed') })
+    }
+  }, [defaultPackageWorkspaceRoot, finishEndSummaryRequest, refreshContextPackages, sessionId, t, updateConversationContextState])
+
+  useEffect(() => {
+    const wasActive = wasActiveRef.current
+    wasActiveRef.current = isActive
+    if (isActive && !wasActive && lastTurnCompletedAtRef.current && Date.now() - lastTurnCompletedAtRef.current >= AUTO_CONTEXT_IDLE_MS) {
+      maybeOpenAutoContextPrompt('return')
+    }
+  }, [isActive, maybeOpenAutoContextPrompt])
+
+  useEffect(() => {
+    if (!endSummaryRequest || handledCloseSummaryNonceRef.current === endSummaryRequest.nonce) return
+    const opened = maybeOpenAutoContextPrompt('close', endSummaryRequest.nonce)
+    if (!opened) {
+      handledCloseSummaryNonceRef.current = endSummaryRequest.nonce
+      onEndSummaryRequestDone?.(sessionId, 'close')
+    }
+  }, [endSummaryRequest, maybeOpenAutoContextPrompt, onEndSummaryRequestDone, sessionId])
+
+  useEffect(() => () => {
+    if (idleContextTimerRef.current) clearTimeout(idleContextTimerRef.current)
+  }, [])
 
   useEffect(() => {
     if (!isActive || isStreaming) return
@@ -500,6 +763,20 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
 
   // Combine archived + live messages for rendering and scanning
   const allMessages = useMemo(() => [...loadedArchive, ...messages], [loadedArchive, messages])
+  const allMessagesRef = useRef<MessageItem[]>(allMessages)
+  const isStreamingRef = useRef(isStreaming)
+  const pendingPermissionRef = useRef<PendingPermission | null>(pendingPermission)
+  const pendingQuestionRef = useRef<PendingAskUser | null>(pendingQuestion)
+  const autoContextModalRef = useRef<AutoContextModal | null>(autoContextModal)
+  const sessionMetaRef = useRef<SessionMeta | null>(sessionMeta)
+
+  useEffect(() => { allMessagesRef.current = allMessages }, [allMessages])
+  useEffect(() => { isActiveRef.current = isActive }, [isActive])
+  useEffect(() => { isStreamingRef.current = isStreaming }, [isStreaming])
+  useEffect(() => { pendingPermissionRef.current = pendingPermission }, [pendingPermission])
+  useEffect(() => { pendingQuestionRef.current = pendingQuestion }, [pendingQuestion])
+  useEffect(() => { autoContextModalRef.current = autoContextModal }, [autoContextModal])
+  useEffect(() => { sessionMetaRef.current = sessionMeta }, [sessionMeta])
 
   const savePickedAsContextPackage = useCallback(() => {
     if (contextPickedSegmentKeys.length === 0) return
@@ -817,6 +1094,8 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
         setIsInterrupted(false)
         setStreamingText('')
         setStreamingThinking('')
+        lastTurnCompletedAtRef.current = Date.now()
+        scheduleAutoContextIdlePrompt()
         // Refresh usage after agent activity (usage likely changed)
         workspaceStore.refreshUsageNow()
         // Show result text only for slash commands that don't produce assistant messages
@@ -1036,7 +1315,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
       window.electronAPI?.debug?.log(`${tag} unsubscribing IPC events`)
       unsubs.forEach(unsub => unsub())
     }
-  }, [sessionId])
+  }, [sessionId, scheduleAutoContextIdlePrompt])
 
   // Start session on mount (guarded against StrictMode double-mount)
   // If a saved sdkSessionId exists (from a previous /resume), auto-resume that session
@@ -1667,6 +1946,13 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
           setContextPickedSegmentKeys([])
           return
         }
+        if (autoContextModal) {
+          if (autoContextModal.mode === 'confirm' && autoContextModal.saving) return
+          e.preventDefault()
+          if (autoContextModal.reason === 'close') finishEndSummaryRequest('cancel')
+          else setAutoContextModal(null)
+          return
+        }
         if (selectionPkgModal) {
           if (!selectionPkgModal.saving) {
             e.preventDefault()
@@ -1761,7 +2047,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
     }
     window.addEventListener('keydown', handleGlobalKeyDown)
     return () => window.removeEventListener('keydown', handleGlobalKeyDown)
-  }, [isActive, isStreaming, handleStop, pendingPermission, permissionFocus, handlePermissionSelect, showResumeList, showModelList, taskModal, contextPkgPickerOpen, contextPickMode, selectionPkgModal, chatSelectionBar, contentModal, showFilePicker, filePickerPreview, showSearchPanel])
+  }, [isActive, isStreaming, handleStop, pendingPermission, permissionFocus, handlePermissionSelect, showResumeList, showModelList, taskModal, contextPkgPickerOpen, contextPickMode, autoContextModal, finishEndSummaryRequest, selectionPkgModal, chatSelectionBar, contentModal, showFilePicker, filePickerPreview, showSearchPanel])
 
   const handleAskUserSubmit = useCallback(() => {
     if (!pendingQuestion) return
@@ -3246,6 +3532,149 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
               <button className="claude-plan-modal-close" onClick={() => setContentModal(null)}>&times;</button>
             </div>
             <pre className="claude-plan-modal-body">{contentModal.content}</pre>
+          </div>
+        </div>
+      )}
+
+      {autoContextModal && (
+        <div
+          className="claude-plan-overlay"
+          onClick={() => {
+            if (autoContextModal.mode === 'confirm' && autoContextModal.saving) return
+            if (autoContextModal.reason === 'close') finishEndSummaryRequest('cancel')
+            else setAutoContextModal(null)
+          }}
+        >
+          <div className="claude-plan-modal claude-context-from-chat-modal claude-auto-context-modal" onClick={e => e.stopPropagation()}>
+            <div className="claude-plan-modal-header">
+              <span className="claude-plan-modal-title">
+                {autoContextModal.mode === 'confirm' ? t('claude.autoContextConfirmTitle') : t('claude.autoContextAskTitle')}
+              </span>
+              <button
+                type="button"
+                className="claude-plan-modal-close"
+                disabled={autoContextModal.mode === 'confirm' && autoContextModal.saving}
+                onClick={() => {
+                  if (autoContextModal.mode === 'confirm' && autoContextModal.saving) return
+                  if (autoContextModal.reason === 'close') finishEndSummaryRequest('cancel')
+                  else setAutoContextModal(null)
+                }}
+              >
+                &times;
+              </button>
+            </div>
+            {autoContextModal.mode === 'ask' && (
+              <div className="claude-context-from-chat-body platform-form">
+                <p className="claude-auto-context-intro">
+                  {t(`claude.${autoContextModal.reason === 'idle' ? 'autoContextIdleBody' : autoContextModal.reason === 'return' ? 'autoContextReturnBody' : 'autoContextCloseBody'}`)}
+                </p>
+                <div className="claude-auto-context-preview">
+                  {autoContextModal.stage.messages.slice(-4).map((m, i) => (
+                    <div key={i}><strong>{m.role}:</strong> {m.content.slice(0, 180)}</div>
+                  ))}
+                </div>
+                <div className="claude-context-save-modal-actions">
+                  {autoContextModal.reason === 'close' && (
+                    <button type="button" className="claude-modal-btn claude-modal-btn--secondary" onClick={() => finishEndSummaryRequest('cancel')}>
+                      {t('claude.autoContextCancelClose')}
+                    </button>
+                  )}
+                  <button type="button" className="claude-modal-btn claude-modal-btn--secondary" onClick={() => dismissAutoContextStage(autoContextModal)}>
+                    {t('claude.autoContextSkip')}
+                  </button>
+                  <button type="button" className="claude-modal-btn claude-modal-btn--primary" onClick={() => generateAutoContextSummary(autoContextModal)}>
+                    {t('claude.autoContextGenerate')}
+                  </button>
+                </div>
+              </div>
+            )}
+            {autoContextModal.mode === 'generating' && (
+              <div className="claude-context-from-chat-body platform-form">
+                <div className="claude-auto-context-loading">{t('claude.autoContextGenerating')}</div>
+                {autoContextModal.error && <div className="claude-selection-form-error">{autoContextModal.error}</div>}
+                {autoContextModal.error && (
+                  <div className="claude-context-save-modal-actions">
+                    {autoContextModal.reason === 'close' && (
+                      <button type="button" className="claude-modal-btn claude-modal-btn--secondary" onClick={() => finishEndSummaryRequest('cancel')}>
+                        {t('claude.autoContextCancelClose')}
+                      </button>
+                    )}
+                    <button type="button" className="claude-modal-btn claude-modal-btn--secondary" onClick={() => dismissAutoContextStage(autoContextModal)}>
+                      {t('claude.autoContextSkip')}
+                    </button>
+                    <button type="button" className="claude-modal-btn claude-modal-btn--primary" onClick={() => generateAutoContextSummary(autoContextModal)}>
+                      {t('claude.autoContextGenerate')}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+            {autoContextModal.mode === 'confirm' && (
+              <div className="claude-context-from-chat-body platform-form">
+                {autoContextModal.err && <div className="claude-selection-form-error">{autoContextModal.err}</div>}
+                {autoContextModal.source === 'heuristic' && <p className="claude-selection-form-hint">{t('claude.autoContextGeneratedByHeuristic')}</p>}
+                <label>
+                  {t('platform.context.name')}
+                  <input
+                    value={autoContextModal.name}
+                    disabled={autoContextModal.saving}
+                    onChange={e => setAutoContextModal(p => (p && p.mode === 'confirm' ? { ...p, name: e.target.value, err: null } : p))}
+                    placeholder={t('platform.context.namePh')}
+                  />
+                </label>
+                <label>
+                  {t('platform.context.description')}
+                  <input
+                    value={autoContextModal.description}
+                    disabled={autoContextModal.saving}
+                    onChange={e => setAutoContextModal(p => (p && p.mode === 'confirm' ? { ...p, description: e.target.value } : p))}
+                  />
+                </label>
+                <label>
+                  {t('platform.context.tags')}
+                  <input
+                    value={autoContextModal.tags}
+                    disabled={autoContextModal.saving}
+                    onChange={e => setAutoContextModal(p => (p && p.mode === 'confirm' ? { ...p, tags: e.target.value } : p))}
+                    placeholder={t('platform.context.tagsPh')}
+                  />
+                </label>
+                <label>
+                  {t('platform.context.content')}
+                  <textarea
+                    rows={12}
+                    value={autoContextModal.content}
+                    disabled={autoContextModal.saving}
+                    onChange={e => setAutoContextModal(p => (p && p.mode === 'confirm' ? { ...p, content: e.target.value } : p))}
+                  />
+                </label>
+                <label className="platform-check-inline claude-selection-attach-row">
+                  <input
+                    type="checkbox"
+                    checked={autoContextModal.attach}
+                    disabled={autoContextModal.saving}
+                    onChange={e => setAutoContextModal(p => (p && p.mode === 'confirm' ? { ...p, attach: e.target.checked } : p))}
+                  />
+                  {t('claude.selectionAttachTab')}
+                </label>
+                <div className="claude-context-save-modal-actions">
+                  {autoContextModal.reason === 'close' && (
+                    <button type="button" className="claude-modal-btn claude-modal-btn--secondary" disabled={autoContextModal.saving} onClick={() => finishEndSummaryRequest('cancel')}>
+                      {t('claude.autoContextCancelClose')}
+                    </button>
+                  )}
+                  <button type="button" className="claude-modal-btn claude-modal-btn--secondary" disabled={autoContextModal.saving} onClick={() => {
+                    if (autoContextModal.reason === 'close') finishEndSummaryRequest('cancel')
+                    else setAutoContextModal(null)
+                  }}>
+                    {t('common.cancel')}
+                  </button>
+                  <button type="button" className="claude-modal-btn claude-modal-btn--primary" disabled={autoContextModal.saving} onClick={saveAutoContextSummary}>
+                    {autoContextModal.saving ? t('claude.autoContextSaving') : t('claude.autoContextSave')}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

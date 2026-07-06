@@ -69,9 +69,15 @@ import { logger } from './logger'
 import { AutomationScheduler } from './automation-scheduler'
 import { WorkflowTriggerScheduler } from './workflow-trigger-scheduler'
 import * as contextPackageStore from './context-package-store'
+import * as contextMemoryStore from './context-memory-store'
+import { runContextMaintenance } from './context-maintenance'
+import { summarizeConversationContext, type ConversationContextSummaryInput } from './conversation-context-summary'
 import * as contextRetrievalService from './context-retrieval-service'
 import * as contextCache from './context-cache'
 import * as contextPackageIndex from './context-package-index'
+import { contextManagerAgent } from './context-manager-agent'
+import { recordNegativeFeedback, recordUserSelection } from './user-preference-learn'
+import { classifyIntent } from './intent-classifier'
 import * as analyticsStore from './analytics-store'
 import { listAutomationJobs, saveAutomationJobs } from './automation-jobs'
 import { runCodeburnReport, isCodeburnAvailable } from './codeburn-bridge'
@@ -81,6 +87,7 @@ import * as traceStore from './trace-store'
 import * as auditEngine from './audit-engine'
 import * as retrievalEngine from './retrieval-engine'
 import * as mcpManager from './mcp-manager'
+import { runStdioContextMcpServer } from './context-mcp-server'
 import * as workflowEngine from './workflow-engine'
 import {
   detectLocalAgentConfigs,
@@ -100,6 +107,23 @@ process.on('uncaughtException', (error) => {
 process.on('unhandledRejection', (reason) => {
   logger.error('Unhandled rejection:', reason)
 })
+
+// Standalone built-in MCP stdio server mode. Launched by --mcp-server=builtin-context.
+const mcpServerFlag = process.argv.find(a => a.startsWith('--mcp-server='))
+if (mcpServerFlag) {
+  const serverId = mcpServerFlag.split('=')[1]
+  if (serverId === 'builtin-context') {
+    runStdioContextMcpServer().catch(e => {
+      logger.error('[mcp-server] fatal:', e instanceof Error ? e.message : String(e))
+      process.exit(1)
+    })
+  } else {
+    logger.error(`[mcp-server] unknown server id: ${serverId}`)
+    process.exit(1)
+  }
+  // Keep alive until stdin ends.
+  process.stdin.on('end', () => process.exit(0))
+}
 
 // GPU disk cache: set dedicated path to avoid "Unable to move the cache" errors on Windows.
 // These errors block GPU compositing and can add seconds to first paint.
@@ -421,6 +445,23 @@ app.whenReady().then(async () => {
       logger.error('Failed to check for updates:', error)
     }
   }, 2000)
+
+  // Schedule context maintenance on startup and every 24 hours.
+  setTimeout(() => {
+    async function runMaintenanceWithSettings() {
+      try {
+        const raw = await fs.readFile(path.join(app.getPath('userData'), 'settings.json'), 'utf-8')
+        const parsed = JSON.parse(raw) as { contextModule?: { memoryDecayDays?: number } }
+        await runContextMaintenance({ memoryDecayDays: parsed.contextModule?.memoryDecayDays ?? 30 })
+      } catch {
+        await runContextMaintenance()
+      }
+    }
+    runMaintenanceWithSettings().catch(e => logger.error('[maintenance] initial run failed:', e))
+    setInterval(() => {
+      runMaintenanceWithSettings().catch(e => logger.error('[maintenance] scheduled run failed:', e))
+    }, 24 * 60 * 60 * 1000)
+  }, 5000)
 })
 
 // Cleanup runs once: before-quit covers cmd+Q / File→Quit paths,
@@ -456,6 +497,13 @@ app.on('activate', () => {
 // ── Proxied handler registration (callable by both IPC and remote server) ──
 
 function registerProxiedHandlers() {
+  // Forward context-manager agent plans to all renderer windows.
+  contextManagerAgent.onPlan = (sessionId, plan) => {
+    BrowserWindow.getAllWindows().forEach(w => {
+      w.webContents.send('contextManagerAgent:plan', sessionId, plan)
+    })
+  }
+
   const MESSAGE_ARCHIVE_DIR = path.join(app.getPath('userData'), 'message-archives')
 
   // PTY
@@ -595,6 +643,15 @@ function registerProxiedHandlers() {
     ) => claudeManager?.sendMessage(sessionId, prompt, images, options)
   )
   registerHandler('claude:stop-session', (sessionId: string) => claudeManager?.stopSession(sessionId))
+  registerHandler('claude:summarize-context', async (input: ConversationContextSummaryInput) => {
+    const draft = await summarizeConversationContext(input)
+    if (draft.memoryEntries?.length) {
+      await contextMemoryStore.recordMemoryEntries(draft.memoryEntries).catch(e =>
+        logger.error('[main] failed to record memory entries:', e instanceof Error ? e.message : String(e))
+      )
+    }
+    return draft
+  })
   registerHandler('claude:set-permission-mode', (sessionId: string, mode: string) => claudeManager?.setPermissionMode(sessionId, mode as import('@anthropic-ai/claude-agent-sdk').PermissionMode))
   registerHandler('claude:set-model', (sessionId: string, model: string) => claudeManager?.setModel(sessionId, model))
   registerHandler('claude:set-effort', (sessionId: string, effort: string) => claudeManager?.setEffort(sessionId, effort as 'low' | 'medium' | 'high' | 'max'))
@@ -1064,6 +1121,21 @@ function registerProxiedHandlers() {
   registerHandler('contextRetrieval:cacheStats', () => contextCache.getContextCacheStats())
   registerHandler('contextRetrieval:clearCache', () => { contextCache.clearContextCaches(); return true })
   registerHandler('contextRetrieval:rebuildIndex', (packageId?: string) => contextPackageIndex.rebuildContextPackageIndex(packageId))
+  registerHandler('contextRetrieval:recordNegativeFeedback', (packageId: string, prompt: string) => recordNegativeFeedback(packageId, prompt))
+  registerHandler('contextRetrieval:recordUserSelection', (packageId: string, prompt: string) => recordUserSelection(packageId, classifyIntent(prompt)))
+
+  // Context manager agent
+  registerHandler('contextManagerAgent:startSession', (sessionId: string, options: { cwd: string; model?: string }) =>
+    contextManagerAgent.startSession(sessionId, options)
+  )
+  registerHandler('contextManagerAgent:plan', (sessionId: string, input: unknown) => contextManagerAgent.plan(sessionId, input as any))
+  registerHandler('contextManagerAgent:stopSession', (sessionId: string) => contextManagerAgent.stopSession(sessionId))
+  registerHandler('contextManagerAgent:getLastPlan', (sessionId: string) => contextManagerAgent.getLastPlan(sessionId))
+
+  // Context maintenance
+  registerHandler('contextMaintenance:run', (options?: { dryRun?: boolean; staleDays?: number; memoryDecayDays?: number }) =>
+    runContextMaintenance(options)
+  )
 
   // Content search (messages + context packages)
   registerHandler('contentSearch:session-messages', (sessionId: string, query: string) =>

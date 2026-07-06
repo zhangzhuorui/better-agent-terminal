@@ -139,6 +139,8 @@ const electronAPI = {
     ) => ipcRenderer.invoke('claude:send-message', sessionId, prompt, images, options),
     stopSession: (sessionId: string) =>
       ipcRenderer.invoke('claude:stop-session', sessionId),
+    summarizeContext: (input: unknown) =>
+      ipcRenderer.invoke('claude:summarize-context', input),
     onMessage: (callback: (sessionId: string, message: unknown) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, sessionId: string, message: unknown) => callback(sessionId, message)
       ipcRenderer.on('claude:message', handler)
@@ -392,6 +394,27 @@ const electronAPI = {
     cacheStats: () => ipcRenderer.invoke('contextRetrieval:cacheStats'),
     clearCache: () => ipcRenderer.invoke('contextRetrieval:clearCache'),
     rebuildIndex: (packageId?: string) => ipcRenderer.invoke('contextRetrieval:rebuildIndex', packageId),
+    recordNegativeFeedback: (packageId: string, prompt: string) => ipcRenderer.invoke('contextRetrieval:recordNegativeFeedback', packageId, prompt),
+    recordUserSelection: (packageId: string, prompt: string) => ipcRenderer.invoke('contextRetrieval:recordUserSelection', packageId, prompt),
+  },
+  contextManagerAgent: {
+    startSession: (sessionId: string, options: { cwd: string; model?: string }) =>
+      ipcRenderer.invoke('contextManagerAgent:startSession', sessionId, options) as Promise<boolean>,
+    plan: (sessionId: string, input: unknown) =>
+      ipcRenderer.invoke('contextManagerAgent:plan', sessionId, input) as Promise<import('../src/types/platform-extensions').ContextManagerAgentPlan>,
+    stopSession: (sessionId: string) =>
+      ipcRenderer.invoke('contextManagerAgent:stopSession', sessionId) as Promise<boolean>,
+    getLastPlan: (sessionId: string) =>
+      ipcRenderer.invoke('contextManagerAgent:getLastPlan', sessionId) as Promise<(import('../src/types/platform-extensions').ContextManagerAgentPlan & { at: number }) | null>,
+    onPlan: (callback: (sessionId: string, plan: unknown) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, sessionId: string, plan: unknown) => callback(sessionId, plan)
+      ipcRenderer.on('contextManagerAgent:plan', handler)
+      return () => ipcRenderer.removeListener('contextManagerAgent:plan', handler)
+    },
+  },
+  contextMaintenance: {
+    run: (options?: { dryRun?: boolean; staleDays?: number; memoryDecayDays?: number }) =>
+      ipcRenderer.invoke('contextMaintenance:run', options) as Promise<import('../src/types/platform-extensions').ContextMaintenanceReport>,
   },
   analytics: {
     getSummary: () => ipcRenderer.invoke('analytics:getSummary'),

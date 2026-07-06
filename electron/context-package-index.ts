@@ -97,7 +97,7 @@ async function writeIndex(data: IndexFileShape): Promise<void> {
 }
 
 export async function getOrBuildContextPackageIndex(): Promise<ContextPackageIndexEntry[]> {
-  const packages = await listContextPackages()
+  const packages = (await listContextPackages()).filter(p => !p.archived)
   const index = await readIndex()
   const byId = new Map(index.entries.map(e => [e.packageId, e]))
   let changed = false

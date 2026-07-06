@@ -4,14 +4,16 @@ import * as fsSync from 'fs'
 import * as fsPromises from 'fs/promises'
 import * as pathModule from 'path'
 import type { ClaudeMessage, ClaudeToolCall, ClaudeSessionState } from '../src/types/claude-agent'
-import type { ContextModuleSettings } from '../src/types'
+import { defaultContextModuleSettings, type ContextModuleSettings } from '../src/types'
 import type { Query, PermissionMode, CanUseTool, SlashCommand } from '@anthropic-ai/claude-agent-sdk'
 import { logger } from './logger'
 import { getNodeExecutable, isElectronFallback } from './node-resolver'
 import * as analyticsStore from './analytics-store'
-import { formatResolvedContextForPrompt, getContextPackagesByIds } from './context-package-store'
+import { formatResolvedContextForPrompt, getContextPackagesByIds, updateContextPackage } from './context-package-store'
 import { buildContextInjectionPlan } from './context-retrieval-service'
 import { compressContextBlocks } from './context-compression-engine'
+import { contextManagerAgent } from './context-manager-agent'
+import * as contextMemoryStore from './context-memory-store'
 import * as injectionEngine from './injection-engine'
 import * as traceStore from './trace-store'
 import * as auditEngine from './audit-engine'
@@ -26,27 +28,25 @@ let queryFn: typeof import('@anthropic-ai/claude-agent-sdk').query | null = null
 let listSessionsFn: typeof import('@anthropic-ai/claude-agent-sdk').listSessions | null = null
 let getSessionMessagesFn: typeof import('@anthropic-ai/claude-agent-sdk').getSessionMessages | null = null
 
-function defaultContextModuleSettings(): ContextModuleSettings {
-  return {
-    autoRetrievalMode: 'recommend',
-    autoInjectMaxPackages: 3,
-    autoInjectMinScore: 0.72,
-    contextTokenBudget: 12000,
-    compressionEnabled: true,
-    summarizeOnSave: true,
-    cacheEnabled: true,
-    includeLocalFiles: false,
-  }
-}
-
 async function loadContextModuleSettings(): Promise<ContextModuleSettings> {
   try {
     const raw = await fsPromises.readFile(pathModule.join(app.getPath('userData'), 'settings.json'), 'utf-8')
     const parsed = JSON.parse(raw) as { contextModule?: Partial<ContextModuleSettings> }
-    return { ...defaultContextModuleSettings(), ...parsed.contextModule }
+    return { ...defaultContextModuleSettings, ...parsed.contextModule }
   } catch {
-    return defaultContextModuleSettings()
+    return defaultContextModuleSettings
   }
+}
+
+function buildContextManagerHistory(session: SessionInstance): Array<{ role: 'user' | 'assistant'; content: string }> {
+  const history: Array<{ role: 'user' | 'assistant'; content: string }> = []
+  const MAX_CHARS_PER_MESSAGE = 2000
+  for (const item of session.state.messages) {
+    if ('toolName' in item) continue
+    if (item.role !== 'user' && item.role !== 'assistant') continue
+    history.push({ role: item.role, content: item.content.slice(0, MAX_CHARS_PER_MESSAGE) })
+  }
+  return history.slice(-24)
 }
 
 async function getQuery() {
@@ -333,6 +333,15 @@ export class ClaudeAgentManager {
         activeTasks: new Map(),
       })
 
+      // Mirror session in the context-manager agent so it can plan context.
+      const contextModuleSettings = await loadContextModuleSettings()
+      contextManagerAgent.startSession(sessionId, {
+        cwd: options.cwd,
+        model: contextModuleSettings.contextManagerAgentModel || options.model,
+      }).catch(e =>
+        logger.warn('[claude-agent-manager] context manager start session failed:', e instanceof Error ? e.message : String(e))
+      )
+
       // If no initial prompt, just set up session and wait
       if (!options.prompt) {
         const resumeNote = previousSdkSessionId ? ' (resumed)' : ''
@@ -405,15 +414,61 @@ export class ClaudeAgentManager {
     const workflowSettings = options?.analyticsSource === 'automation'
       ? { ...settings, autoRetrievalMode: 'off' as const }
       : settings
+
+    // Optional context-manager agent: have a secondary planning agent decide
+    // which packages to attach / create / update based on the conversation.
+    let agentRecommendedIds: string[] = []
+    if (workflowSettings.contextManagerAgentEnabled && options?.analyticsSource !== 'automation') {
+      const planAbortController = new AbortController()
+      try {
+        const agentPlan = await Promise.race([
+          contextManagerAgent.plan(sessionId, {
+            prompt,
+            workspacePath: session.cwd || undefined,
+            explicitPackageIds,
+            sessionHistory: buildContextManagerHistory(session),
+          }, { abortController: planAbortController }),
+          new Promise<never>((_, reject) => setTimeout(() => {
+            planAbortController.abort()
+            reject(new Error('context manager agent timeout'))
+          }, 15000)),
+        ])
+        agentRecommendedIds = [
+          ...new Set([
+            ...agentPlan.explicitPackageIds,
+            ...agentPlan.recommendedPackageIds,
+            ...(agentPlan.createdPackageIds ?? []),
+          ]),
+        ]
+        logger.log(`[claude-agent-manager] context manager recommended ${agentRecommendedIds.length} package(s) for ${sessionId}`)
+      } catch (e) {
+        logger.warn(`[claude-agent-manager] context manager plan failed for ${sessionId}: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    }
+
     const plan = await buildContextInjectionPlan({
       prompt,
       workspacePath: session.cwd || '',
       agentPreset: (session as any).agentPreset,
       explicitPackageIds,
       rulePackageIds,
+      agentRecommendedIds,
       settings: workflowSettings,
     })
     const packages = plan.finalPackageIds.length > 0 ? await getContextPackagesByIds(plan.finalPackageIds) : []
+
+    // Update usage tracking for injected packages in the background.
+    for (const pkg of packages) {
+      try {
+        await updateContextPackage(pkg.id, {
+          lastUsedAt: Date.now(),
+          usageCount: (pkg.usageCount ?? 0) + 1,
+        })
+      } catch (e) {
+        logger.warn(`[claude-agent-manager] failed to update usage for ${pkg.id}: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    }
+
     const resolvedBlocks = workflowSettings.compressionEnabled
       ? compressContextBlocks({
         packages,
@@ -421,6 +476,8 @@ export class ClaudeAgentManager {
         explicitPackageIds,
         tokenBudget: workflowSettings.contextTokenBudget,
         recommendations: plan.recommendations,
+        structuredCompressionEnabled: workflowSettings.structuredCompressionEnabled,
+        retrieveIdCompressionEnabled: workflowSettings.retrieveIdCompressionEnabled,
       })
       : packages.map(pkg => ({
         id: `${pkg.id}:full`,
@@ -435,6 +492,32 @@ export class ClaudeAgentManager {
         tokenEstimate: pkg.metadata?.tokenEstimate ?? Math.ceil(pkg.content.length / 4),
         contentHash: pkg.metadata?.contentHash,
       }))
+    // Inject high-confidence memory entries as a synthetic context block.
+    if (workflowSettings.autoMemoryEnabled && plan.memoryRecommendations?.length) {
+      try {
+        const memoryEntries = await contextMemoryStore.getMemoryEntriesByIds(
+          plan.memoryRecommendations.slice(0, 5).map(r => r.packageId)
+        )
+        if (memoryEntries.length) {
+          const memoryContent = memoryEntries.map(e => `- [${e.kind}] ${e.content}`).join('\n')
+          const memoryBlock = {
+            id: 'memory:auto',
+            packageId: 'memory',
+            title: 'Relevant memory',
+            source: 'auto' as const,
+            content: memoryContent,
+            tags: ['memory'],
+            compression: 'none' as const,
+            score: plan.memoryRecommendations[0]?.score,
+            tokenEstimate: Math.ceil(memoryContent.length / 4),
+          }
+          resolvedBlocks.unshift(memoryBlock)
+        }
+      } catch (e) {
+        logger.warn(`[claude-agent-manager] failed to load memory entries for ${sessionId}: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    }
+
     plan.estimatedTokens = resolvedBlocks.reduce((sum, block) => sum + block.tokenEstimate, 0)
     plan.compressed = resolvedBlocks.some(block => block.compression !== 'none')
     this.send('claude:context-plan', sessionId, plan)
@@ -1159,6 +1242,9 @@ export class ClaudeAgentManager {
       }
       session.state.isStreaming = false
       // Keep the session alive so the user can continue the conversation
+      contextManagerAgent.stopSession(sessionId).catch(e =>
+        logger.warn('[claude-agent-manager] context manager stop session failed:', e instanceof Error ? e.message : String(e))
+      )
       return true
     }
     return false

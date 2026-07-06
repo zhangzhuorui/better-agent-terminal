@@ -1,5 +1,20 @@
 import type { CreatePtyOptions } from './index'
-import type { ContextInjectionPlan, ContextPackage, ContextRecommendation, ContextRetrievalOptions } from './platform-extensions'
+import type { ContextInjectionPlan, ContextManagerAgentPlan, ContextPackage, ContextRecommendation, ContextRetrievalOptions } from './platform-extensions'
+
+export interface ConversationContextSummaryInput {
+  sessionId: string
+  cwd?: string
+  sdkSessionId?: string
+  messages: Array<{ role: 'user' | 'assistant'; content: string; timestamp?: number }>
+}
+
+export interface ConversationContextSummaryDraft {
+  name: string
+  description?: string
+  content: string
+  tags?: string[]
+  source: 'llm' | 'heuristic'
+}
 
 interface ElectronAPI {
   platform: 'win32' | 'darwin' | 'linux'
@@ -74,6 +89,8 @@ interface ElectronAPI {
     openNewInstance: (profileId: string) => Promise<void>
     getLaunchProfile: () => Promise<string | null>
     setDockBadge: (count: number) => Promise<void>
+    /** BrowserWindow background (#RRGGBB); aligns with interface light/dark theme. */
+    setChromeBackgroundColor: (hex: string) => Promise<void>
   }
   update: {
     check: () => Promise<unknown>
@@ -83,17 +100,11 @@ interface ElectronAPI {
     saveImage: () => Promise<string | null>
     writeImage: (filePath: string) => Promise<boolean>
   }
-  app: {
-    openNewInstance: (profileId: string) => Promise<void>
-    getLaunchProfile: () => Promise<string | null>
-    setDockBadge: (count: number) => Promise<void>
-    /** BrowserWindow background (#RRGGBB); aligns with interface light/dark theme. */
-    setChromeBackgroundColor: (hex: string) => Promise<void>
-  }
   claude: {
     startSession: (sessionId: string, options: { cwd: string; prompt?: string; permissionMode?: string; model?: string }) => Promise<boolean>
     sendMessage: (sessionId: string, prompt: string, images?: string[], options?: { contextPackageIds?: string[]; analyticsSource?: 'user' | 'automation' }) => Promise<boolean>
     stopSession: (sessionId: string) => Promise<boolean>
+    summarizeContext: (input: ConversationContextSummaryInput) => Promise<ConversationContextSummaryDraft>
     onMessage: (callback: (sessionId: string, message: unknown) => void) => () => void
     onToolUse: (callback: (sessionId: string, toolCall: unknown) => void) => () => void
     onToolResult: (callback: (sessionId: string, result: unknown) => void) => () => void
@@ -200,6 +211,18 @@ interface ElectronAPI {
     cacheStats: () => Promise<{ hit: number; miss: number; size: number; lastClearedAt: number }>
     clearCache: () => Promise<boolean>
     rebuildIndex: (packageId?: string) => Promise<unknown[]>
+    recordNegativeFeedback: (packageId: string, prompt: string) => Promise<void>
+    recordUserSelection: (packageId: string, prompt: string) => Promise<void>
+  }
+  contextManagerAgent: {
+    startSession: (sessionId: string, options: { cwd: string; model?: string }) => Promise<boolean>
+    plan: (sessionId: string, input: unknown) => Promise<ContextManagerAgentPlan>
+    stopSession: (sessionId: string) => Promise<boolean>
+    getLastPlan: (sessionId: string) => Promise<(ContextManagerAgentPlan & { at: number }) | null>
+    onPlan: (callback: (sessionId: string, plan: ContextManagerAgentPlan) => void) => () => void
+  }
+  contextMaintenance: {
+    run: (options?: { dryRun?: boolean; staleDays?: number; memoryDecayDays?: number }) => Promise<ContextMaintenanceReport>
   }
   analytics: {
     getSummary: () => Promise<unknown>

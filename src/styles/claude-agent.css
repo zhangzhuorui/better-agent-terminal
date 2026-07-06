@@ -2467,6 +2467,38 @@ html[data-theme='light'] .claude-tool-result .hljs-number {
   font-family: inherit;
 }
 
+.claude-auto-context-modal {
+  width: min(680px, 92vw);
+}
+
+.claude-auto-context-intro {
+  margin: 0 0 14px;
+  color: var(--text-primary);
+  line-height: 1.5;
+}
+
+.claude-auto-context-preview {
+  max-height: 180px;
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: calc(var(--claude-font-size) - 2px);
+  line-height: 1.45;
+}
+
+.claude-auto-context-preview > div + div {
+  margin-top: 8px;
+}
+
+.claude-auto-context-loading {
+  padding: 18px 0;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
 .claude-selection-form-error {
   color: var(--danger-color);
   font-size: 13px;

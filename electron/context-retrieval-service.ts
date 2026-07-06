@@ -6,6 +6,8 @@ import { getOrBuildContextPackageIndex } from './context-package-index'
 import { recommendLocalContext } from './local-context-retriever'
 import { classifyIntent, scoreByIntent } from './intent-classifier'
 import { getUserPreferences, refreshCache } from './user-preference-learn'
+import { getContextPackagesByIds } from './context-package-store'
+import { searchMemoryEntries } from './context-memory-store'
 
 function normalizeQuery(text: string): string[] {
   const tokens = text
@@ -119,12 +121,38 @@ export async function recommendContextPackages(options: ContextRetrievalOptions)
   return { recommendations, cacheHit: false }
 }
 
+async function recommendMemory(options: { prompt: string; workspacePath?: string; limit?: number }): Promise<ContextRecommendation[]> {
+  const entries = await searchMemoryEntries(options.prompt, { workspaceRoot: options.workspacePath, limit: options.limit ?? 5 })
+  const tokens = normalizeQuery(options.prompt)
+  return entries
+    .map(entry => {
+      const lower = entry.content.toLowerCase()
+      const matches = tokens.reduce((sum, t) => sum + (lower.includes(t) ? 1 : 0), 0)
+      const score = Math.min(0.98, 0.3 + matches * 0.14)
+      return {
+        packageId: entry.id,
+        name: entry.kind,
+        score: Number(score.toFixed(3)),
+        matches,
+        reasons: matches > 0 ? ['memory match'] : ['weak memory match'],
+        tokenEstimate: Math.ceil(entry.content.length / 4),
+        summary: entry.content.slice(0, 160),
+        tags: entry.tags,
+        workspaceRoot: entry.workspaceRoot,
+        source: 'memory' as const,
+      }
+    })
+    .filter(entry => entry.matches > 0 && entry.score >= 0.5)
+    .map(({ matches, ...rec }) => rec)
+}
+
 export async function buildContextInjectionPlan(input: {
   prompt: string
   workspacePath?: string
   agentPreset?: AgentPresetId
   explicitPackageIds: string[]
   rulePackageIds?: string[]
+  agentRecommendedIds?: string[]
   settings: ContextModuleSettings
 }): Promise<ContextInjectionPlan> {
   const mode = input.settings.autoRetrievalMode
@@ -143,22 +171,53 @@ export async function buildContextInjectionPlan(input: {
     minScore: mode === 'inject' ? input.settings.autoInjectMinScore : 0.12,
     includeLocalFiles: input.settings.includeLocalFiles,
   })
+
+  // Inject recommendations from the context-manager agent. These are treated as
+  // high-confidence matches and compete with normal recommendations by score.
+  const agentRecommendedIds = [...new Set(input.agentRecommendedIds ?? [])]
+    .filter(id => !explicitPackageIds.includes(id) && !rulePackageIds.includes(id))
+  let agentRecommendations: ContextRecommendation[] = []
+  if (agentRecommendedIds.length) {
+    const agentPkgs = await getContextPackagesByIds(agentRecommendedIds)
+    agentRecommendations = agentPkgs.map(pkg => ({
+      packageId: pkg.id,
+      name: pkg.name,
+      score: 0.95,
+      reasons: ['context manager agent'],
+      tokenEstimate: pkg.metadata?.tokenEstimate ?? Math.ceil(pkg.content.length / 4),
+      summary: pkg.metadata?.shortSummary ?? pkg.metadata?.summary,
+      tags: [...(pkg.tags ?? []), ...(pkg.metadata?.autoTags ?? [])],
+      workspaceRoot: pkg.workspaceRoot,
+      source: 'context-package' as const,
+    }))
+  }
+
+  const mergedRecommendations = [...recommendations, ...agentRecommendations]
+    .sort((a, b) => b.score - a.score)
+    .slice(0, (input.settings.autoInjectMaxPackages ?? 8) + agentRecommendations.length)
+
   const recommendedPackageIds = mode === 'inject'
-    ? recommendations.filter(r => r.source !== 'local-file' && r.score >= input.settings.autoInjectMinScore).slice(0, input.settings.autoInjectMaxPackages).map(r => r.packageId)
+    ? mergedRecommendations.filter(r => r.source !== 'local-file' && r.score >= input.settings.autoInjectMinScore).slice(0, input.settings.autoInjectMaxPackages).map(r => r.packageId)
     : []
   const finalPackageIds = mode === 'off'
     ? [...new Set([...explicitPackageIds, ...rulePackageIds])]
     : [...new Set([...explicitPackageIds, ...rulePackageIds, ...recommendedPackageIds])]
-  const estimatedTokens = recommendations
+  const estimatedTokens = mergedRecommendations
     .filter(r => finalPackageIds.includes(r.packageId))
     .reduce((sum, r) => sum + (r.tokenEstimate ?? 0), 0)
+
+  const memoryRecommendations = input.settings.autoMemoryEnabled
+    ? await recommendMemory({ prompt: input.prompt, workspacePath: input.workspacePath, limit: 5 })
+    : []
+
   const plan: ContextInjectionPlan = {
     mode,
     explicitPackageIds,
     rulePackageIds,
     recommendedPackageIds,
     finalPackageIds,
-    recommendations,
+    recommendations: mergedRecommendations,
+    memoryRecommendations,
     tokenBudget: input.settings.contextTokenBudget,
     estimatedTokens,
     cacheHit,

@@ -59,6 +59,15 @@ export interface TerminalInstance {
   };
   /** Context package IDs attached to this agent tab (merged into each send). */
   contextPackageIds?: string[];
+  conversationContext?: {
+    sdkSessionId?: string;
+    lastStageFingerprint?: string;
+    lastSavedMessageCount?: number;
+    lastSavedAt?: number;
+    lastSavedPackageId?: string;
+    lastDismissedStageFingerprint?: string;
+    lastDismissedAt?: number;
+  };
 }
 
 export interface AppState {
@@ -224,9 +233,32 @@ export interface ContextModuleSettings {
   autoInjectMinScore: number
   contextTokenBudget: number
   compressionEnabled: boolean
+  structuredCompressionEnabled: boolean
+  retrieveIdCompressionEnabled: boolean
   summarizeOnSave: boolean
   cacheEnabled: boolean
   includeLocalFiles: boolean
+  autoMemoryEnabled: boolean
+  contextManagerAgentEnabled: boolean
+  contextManagerAgentModel?: string
+  memoryDecayDays: number
+}
+
+export const defaultContextModuleSettings: ContextModuleSettings = {
+  autoRetrievalMode: 'recommend',
+  autoInjectMaxPackages: 3,
+  autoInjectMinScore: 0.72,
+  contextTokenBudget: 12000,
+  compressionEnabled: true,
+  structuredCompressionEnabled: true,
+  retrieveIdCompressionEnabled: false,
+  summarizeOnSave: true,
+  cacheEnabled: true,
+  includeLocalFiles: false,
+  autoMemoryEnabled: false,
+  contextManagerAgentEnabled: false,
+  contextManagerAgentModel: 'claude-sonnet-4-6',
+  memoryDecayDays: 30,
 }
 
 export interface AppSettings {

@@ -66,7 +66,14 @@
       "Bash(\"/tmp/test-write.txt\":*)",
       "Read(//tmp/**)",
       "Bash(node:*)",
-      "Bash(git:*)"
+      "Bash(git:*)",
+      "Skill(claude-api)",
+      "Bash(ELECTRON_MIRROR=\"https://npmmirror.com/mirrors/electron/\" npx electron-builder --win --x64)",
+      "Bash(gh search:*)",
+      "Bash(gh repo:*)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "mcp__ide__getDiagnostics",
+      "Bash(npx tsx:*)"
     ]
   }
 }

@@ -100,6 +100,7 @@ export function clearInitializedWorkspaces(): void {
 export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActive }: Readonly<WorkspaceViewProps>) {
   const { t } = useTranslation()
   const [showCloseConfirm, setShowCloseConfirm] = useState<string | null>(null)
+  const [pendingCloseSummary, setPendingCloseSummary] = useState<{ terminalId: string; nonce: number } | null>(null)
   const [thumbnailSettings, setThumbnailSettings] = useState<ThumbnailSettings>(loadThumbnailSettings)
   const [activeTab, setActiveTab] = useState<WorkspaceTab>(loadWorkspaceTab)
 
@@ -331,32 +332,45 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
     void handleAddGenericAgent('copilot-cli')
   }, [handleAddGenericAgent])
 
+  const closeTerminalNow = useCallback((id: string) => {
+    const terminal = terminals.find(t => t.id === id)
+    if (terminal?.agentPreset && isSdkAgent(terminal.agentPreset)) {
+      window.electronAPI.claude.stopSession(id)
+    } else {
+      window.electronAPI.pty.kill(id)
+    }
+    workspaceStore.removeTerminal(id)
+    workspaceStore.save()
+  }, [terminals])
+
   const handleCloseTerminal = useCallback((id: string) => {
     const terminal = terminals.find(t => t.id === id)
     // Show confirm for agent terminals
     if (terminal?.agentPreset && terminal.agentPreset !== 'none') {
       setShowCloseConfirm(id)
     } else {
-      // Regular terminals always use PTY
-      window.electronAPI.pty.kill(id)
-      workspaceStore.removeTerminal(id)
-      workspaceStore.save()
+      closeTerminalNow(id)
     }
-  }, [terminals])
+  }, [closeTerminalNow, terminals])
 
   const handleConfirmClose = useCallback(() => {
-    if (showCloseConfirm) {
-      const terminal = terminals.find(t => t.id === showCloseConfirm)
-      if (terminal?.agentPreset && isSdkAgent(terminal.agentPreset)) {
-        window.electronAPI.claude.stopSession(showCloseConfirm)
-      } else {
-        window.electronAPI.pty.kill(showCloseConfirm)
-      }
-      workspaceStore.removeTerminal(showCloseConfirm)
-      workspaceStore.save()
+    if (!showCloseConfirm) return
+    const terminal = terminals.find(t => t.id === showCloseConfirm)
+    if (terminal?.agentPreset && isSdkAgent(terminal.agentPreset)) {
+      workspaceStore.setFocusedTerminal(showCloseConfirm)
+      handleTabChange('terminal')
+      setPendingCloseSummary({ terminalId: showCloseConfirm, nonce: Date.now() })
       setShowCloseConfirm(null)
+      return
     }
-  }, [showCloseConfirm, terminals])
+    closeTerminalNow(showCloseConfirm)
+    setShowCloseConfirm(null)
+  }, [closeTerminalNow, handleTabChange, showCloseConfirm, terminals])
+
+  const handleEndSummaryRequestDone = useCallback((terminalId: string, action: 'close' | 'cancel') => {
+    setPendingCloseSummary(prev => (prev?.terminalId === terminalId ? null : prev))
+    if (action === 'close') closeTerminalNow(terminalId)
+  }, [closeTerminalNow])
 
   const handleRestart = useCallback(async (id: string) => {
     const terminal = terminals.find(t => t.id === id)
@@ -431,6 +445,8 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
                 onClose={handleCloseTerminal}
                 onRestart={handleRestart}
                 workspaceId={workspace.id}
+                endSummaryRequest={pendingCloseSummary?.terminalId === terminal.id ? { nonce: pendingCloseSummary.nonce, reason: 'close' } : null}
+                onEndSummaryRequestDone={handleEndSummaryRequestDone}
               />
             </div>
           ))}

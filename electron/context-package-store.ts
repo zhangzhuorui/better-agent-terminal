@@ -93,7 +93,7 @@ export async function createContextPackage(input: {
 
 export async function updateContextPackage(
   id: string,
-  updates: Partial<Pick<ContextPackage, 'name' | 'description' | 'content' | 'tags' | 'workspaceRoot'>>,
+  updates: Partial<Pick<ContextPackage, 'name' | 'description' | 'content' | 'tags' | 'workspaceRoot' | 'archived' | 'lastUsedAt' | 'usageCount'>>,
   saveVersion = true
 ): Promise<ContextPackage | null> {
   const f = await readFile()
@@ -123,6 +123,9 @@ export async function updateContextPackage(
     ...('workspaceRoot' in updates
       ? { workspaceRoot: updates.workspaceRoot?.trim() ? updates.workspaceRoot.trim() : undefined }
       : {}),
+    ...('archived' in updates ? { archived: updates.archived } : {}),
+    ...('lastUsedAt' in updates ? { lastUsedAt: updates.lastUsedAt } : {}),
+    ...('usageCount' in updates ? { usageCount: updates.usageCount } : {}),
     updatedAt: Date.now(),
     versions,
   }
@@ -313,12 +316,21 @@ function escapeAttr(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')
 }
 
+function renderRetrieveIdMap(map?: Record<string, string>): string {
+  if (!map || Object.keys(map).length === 0) return ''
+  const entries = Object.entries(map)
+  if (entries.length === 0) return ''
+  const lines = entries.map(([id, text]) => `${id} = ${text}`)
+  return `Retrieve-IDs:\n${lines.join('\n')}\n`
+}
+
 export function formatResolvedContextForPrompt(blocks: ResolvedContextBlock[], userPrompt: string, _plan?: ContextInjectionPlan): string {
   if (!blocks.length) return userPrompt
   const rendered = blocks.map(block => {
     const tags = block.tags?.length ? `Tags: ${block.tags.join(', ')}\n` : ''
     const summary = block.summary ? `Summary: ${block.summary}\n` : ''
-    return `<context-block source="${block.source}" id="${escapeAttr(block.packageId)}" title="${escapeAttr(block.title)}" compression="${block.compression}" tokens="${block.tokenEstimate}">\n${summary}${tags}Content:\n${block.content.trim()}\n</context-block>`
+    const retrieveMap = renderRetrieveIdMap(block.retrieveIdMap)
+    return `<context-block source="${block.source}" id="${escapeAttr(block.packageId)}" title="${escapeAttr(block.title)}" compression="${block.compression}" tokens="${block.tokenEstimate}">\n${summary}${tags}${retrieveMap}Content:\n${block.content.trim()}\n</context-block>`
   })
   return `### Retrieved Context\nThe following context was selected, rule-injected, or automatically retrieved. Some content may be compressed.\n\n${rendered.join('\n\n')}\n\n### User message\n${userPrompt}`
 }

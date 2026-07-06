@@ -6,6 +6,20 @@ export interface ContextPackageVersion {
   updatedAt: number
 }
 
+export type ContextContentType = 'text' | 'json' | 'code' | 'markdown'
+
+export interface StructuredCompressionVariant {
+  mode: ContextContentType
+  summary: string
+  body: string
+  tokenEstimate: number
+  originalTokens: number
+  /** Short ID -> original text map for CCR-style reversible compression. */
+  retrieveIdMap?: Record<string, string>
+  /** Terms that caused full detail to be preserved. */
+  queryTerms?: string[]
+}
+
 export interface ContextPackageMetadata {
   summary?: string
   shortSummary?: string
@@ -18,6 +32,8 @@ export interface ContextPackageMetadata {
   tokenEstimate?: number
   metadataVersion?: number
   generatedAt?: number
+  contentType?: ContextContentType
+  compressionProfile?: 'none' | 'structure' | 'retrieve-id' | 'auto'
 }
 
 export interface ContextPackageChunk {
@@ -51,8 +67,12 @@ export interface ContextPackage {
     brief?: string
     medium?: string
     detailed?: string
+    structured?: StructuredCompressionVariant
     updatedAt: number
   }
+  archived?: boolean
+  lastUsedAt?: number
+  usageCount?: number
 }
 
 export type ResolvedContextSource = 'explicit' | 'rule' | 'auto'
@@ -67,7 +87,7 @@ export interface ContextRecommendation {
   summary?: string
   tags?: string[]
   workspaceRoot?: string
-  source?: 'context-package' | 'local-file'
+  source?: 'context-package' | 'local-file' | 'memory'
 }
 
 export interface ContextRetrievalOptions {
@@ -87,6 +107,8 @@ export interface ContextInjectionPlan {
   recommendedPackageIds: string[]
   finalPackageIds: string[]
   recommendations: ContextRecommendation[]
+  /** High-confidence memory entries surfaced for this prompt. */
+  memoryRecommendations?: ContextRecommendation[]
   tokenBudget: number
   estimatedTokens: number
   cacheHit?: boolean
@@ -101,10 +123,43 @@ export interface ResolvedContextBlock {
   content: string
   summary?: string
   tags?: string[]
-  compression: ContextCompressionMode
+  compression: ContextCompressionMode | 'structured'
   score?: number
   tokenEstimate: number
   contentHash?: string
+  retrieveIdMap?: Record<string, string>
+}
+
+export interface ContextMemoryEntry {
+  id: string
+  packageId?: string
+  sessionId?: string
+  kind: 'fact' | 'decision' | 'constraint' | 'blocker' | 'file' | 'goal'
+  content: string
+  confidence: number
+  createdAt: number
+  updatedAt: number
+  workspaceRoot?: string
+  tags?: string[]
+}
+
+export interface ContextManagerAgentPlan {
+  explicitPackageIds: string[]
+  rulePackageIds: string[]
+  recommendedPackageIds: string[]
+  createdPackages?: Array<{ name: string; description?: string; content: string; tags?: string[]; workspaceRoot?: string }>
+  updatedPackages?: Array<{ packageId: string; content: string }>
+  createdPackageIds?: string[]
+  updatedPackageIds?: string[]
+  memoryEntries?: ContextMemoryEntry[]
+  reasoning?: string
+}
+
+export interface ContextMaintenanceReport {
+  archivedPackages: string[]
+  mergedPackages: string[]
+  deletedPackages: string[]
+  prunedMemoryEntries: number
 }
 
 export interface DailyAnalyticsModelBreakdown {
@@ -169,7 +224,7 @@ export interface AutomationJob {
    * `claude_loop` — send a `/loop …` line so Claude Code’s bundled loop skill runs in-session (requires compatible CLI).
    */
   promptDelivery?: AutomationPromptDelivery
-  /** e.g. `5m`, `1h`; optional when `promptDelivery === ‘claude_loop’` (see `buildAutomationPromptText`). */
+  /** e.g. `5m`, `1h`; optional when `promptDelivery === 'claude_loop'` (see `buildAutomationPromptText`). */
   loopInterval?: string
   contextPackageIds?: string[]
   permissionMode?: AutomationPermissionMode
@@ -186,8 +241,8 @@ export interface McpServerConfig {
   name: string
   enabled: boolean
   /** Transport type for MCP connection */
-  transport: ‘stdio’ | ‘sse’ | ‘websocket’
-  /** Command to launch stdio server (e.g. ‘npx’, ‘node’, ‘python’) */
+  transport: 'stdio' | 'sse' | 'websocket'
+  /** Command to launch stdio server (e.g. 'npx', 'node', 'python') */
   command?: string
   /** Arguments for stdio command */
   args?: string[]
@@ -213,7 +268,7 @@ export interface McpToolInfo {
 //   Workflow Orchestration
 // ============================================
 
-export type WorkflowTriggerType = ‘schedule’ | ‘git_commit’ | ‘file_change’ | ‘webhook’ | ‘manual’
+export type WorkflowTriggerType = 'schedule' | 'git_commit' | 'file_change' | 'webhook' | 'manual'
 
 export interface WorkflowTrigger {
   type: WorkflowTriggerType
@@ -229,27 +284,27 @@ export interface WorkflowTrigger {
   webhookSecret?: string
 }
 
-/** V2 node types — ‘send’ is deprecated, use ‘agent’ or ‘terminal’ */
+/** V2 node types — 'send' is deprecated, use 'agent' or 'terminal' */
 export type WorkflowNodeType =
-  | ‘send’        // v1 legacy
-  | ‘agent’       // send prompt to an agent and wait for completion
-  | ‘terminal’    // send command to a terminal
-  | ‘wait’        // wait for duration or event
-  | ‘condition’   // conditional branch
-  | ‘human’       // human approval
-  | ‘parallel’    // parallel gateway (fork)
-  | ‘join’        // join gateway (sync)
-  | ‘loop’        // loop/repeat
-  | ‘start’       // visual start node
-  | ‘end’         // visual end node
-  | ‘mcp’         // MCP tool call
+  | 'send'        // v1 legacy
+  | 'agent'       // send prompt to an agent and wait for completion
+  | 'terminal'    // send command to a terminal
+  | 'wait'        // wait for duration or event
+  | 'condition'   // conditional branch
+  | 'human'       // human approval
+  | 'parallel'    // parallel gateway (fork)
+  | 'join'        // join gateway (sync)
+  | 'loop'        // loop/repeat
+  | 'start'       // visual start node
+  | 'end'         // visual end node
+  | 'mcp'         // MCP tool call
 
 export interface WorkflowNodePosition {
   x: number
   y: number
 }
 
-export type WorkflowAgentPreset = string | ‘inherit’
+export type WorkflowAgentPreset = string | 'inherit'
 
 export interface WorkflowNode {
   id: string
@@ -258,38 +313,38 @@ export interface WorkflowNode {
   label?: string
   /** Canvas position (V2) */
   position?: WorkflowNodePosition
-  /** For ‘agent’/’send’/’terminal’: target terminal */
+  /** For 'agent'/'send'/'terminal': target terminal */
   terminalId?: string
-  /** For ‘agent’/’send’: prompt text */
+  /** For 'agent'/'send': prompt text */
   prompt?: string
   contextPackageIds?: string[]
   permissionMode?: AutomationPermissionMode
-  /** For ‘agent’: which agent preset to use (‘inherit’ = use terminal’s preset) */
+  /** For 'agent': which agent preset to use ('inherit' = use terminal's preset) */
   agentPreset?: WorkflowAgentPreset
-  /** For ‘agent’: override default model */
+  /** For 'agent': override default model */
   model?: string
-  /** For ‘agent’: override effort setting */
+  /** For 'agent': override effort setting */
   effort?: string
-  /** For ‘agent’: wait for agent to finish (default true) */
+  /** For 'agent': wait for agent to finish (default true) */
   waitForComplete?: boolean
-  /** For ‘wait’: duration in ms or event name */
+  /** For 'wait': duration in ms or event name */
   durationMs?: number
-  waitForEvent?: ‘agent_complete’ | ‘file_change’ | ‘user_input’
-  /** For ‘condition’: simple expression like ‘{{prev.status}} === "success"’ */
+  waitForEvent?: 'agent_complete' | 'file_change' | 'user_input'
+  /** For 'condition': simple expression like '{{prev.status}} === "success"' */
   condition?: string
-  /** For ‘human’: confirmation dialog text */
+  /** For 'human': confirmation dialog text */
   confirmTitle?: string
   confirmDescription?: string
   timeoutMs?: number
-  /** For ‘parallel’: child node IDs */
+  /** For 'parallel': child node IDs */
   parallelNodeIds?: string[]
-  /** For ‘loop’: child node ID and loop config */
+  /** For 'loop': child node ID and loop config */
   loopNodeId?: string
   loopCount?: number
   loopUntil?: string
-  /** For ‘terminal’: shell command to execute */
+  /** For 'terminal': shell command to execute */
   command?: string
-  /** For ‘mcp’: MCP server and tool config */
+  /** For 'mcp': MCP server and tool config */
   mcpServerId?: string
   mcpToolName?: string
   mcpToolInput?: Record<string, unknown>
@@ -324,25 +379,25 @@ export interface WorkflowDefinition {
   updatedAt: number
 }
 
-export type WorkflowExecutionStatus = ‘pending’ | ‘running’ | ‘paused’ | ‘completed’ | ‘failed’ | ‘cancelled’
+export type WorkflowExecutionStatus = 'pending' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled'
 
 export type WorkflowNodeExecutionStatus =
-  | ‘pending’
-  | ‘queued’
-  | ‘running’
-  | ‘waiting_agent’
-  | ‘waiting_human’
-  | ‘waiting_event’
-  | ‘completed’
-  | ‘failed’
-  | ‘skipped’
-  | ‘timeout’
-  | ‘cancelled’
+  | 'pending'
+  | 'queued'
+  | 'running'
+  | 'waiting_agent'
+  | 'waiting_human'
+  | 'waiting_event'
+  | 'completed'
+  | 'failed'
+  | 'skipped'
+  | 'timeout'
+  | 'cancelled'
 
 export interface WorkflowNodeToolCall {
   id: string
   name: string
-  status: ‘running’ | ‘completed’ | ‘failed’
+  status: 'running' | 'completed' | 'failed'
   startedAt: number
   endedAt?: number
 }

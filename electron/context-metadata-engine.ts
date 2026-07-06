@@ -1,5 +1,7 @@
 import { createHash } from 'crypto'
-import type { ContextPackageChunk, ContextPackageMetadata } from '../src/types/platform-extensions'
+import type { ContextContentType, ContextPackageChunk, ContextPackageMetadata } from '../src/types/platform-extensions'
+import { compressStructured, detectContentType } from './context-structured-compressor'
+import { logger } from './logger'
 
 export interface GeneratedContextMetadata {
   metadata: ContextPackageMetadata
@@ -8,6 +10,7 @@ export interface GeneratedContextMetadata {
     brief?: string
     medium?: string
     detailed?: string
+    structured?: import('../src/types/platform-extensions').StructuredCompressionVariant
     updatedAt: number
   }
 }
@@ -33,8 +36,16 @@ const TAG_RULES: Array<[string, RegExp]> = [
   ['context', /\b(context package|context|retrieval|injection|prompt)\b/i],
 ]
 
-export function estimateTokens(text: string): number {
-  return Math.max(1, Math.ceil(text.length / 4))
+const TOKEN_DENSITY: Record<ContextContentType, number> = {
+  json: 0.55,
+  code: 0.65,
+  markdown: 0.85,
+  text: 1.0,
+}
+
+export function estimateTokens(text: string, contentType?: ContextContentType): number {
+  const density = contentType ? TOKEN_DENSITY[contentType] : TOKEN_DENSITY.text
+  return Math.max(1, Math.ceil(text.length * density / 4))
 }
 
 function hash(text: string): string {
@@ -131,13 +142,23 @@ function trimText(text: string, max: number): string {
   return normalized.length <= max ? normalized : `${normalized.slice(0, max - 1).trim()}…`
 }
 
-function makeCompressed(summary: string, content: string): GeneratedContextMetadata['compressed'] {
-  return {
+function makeCompressed(summary: string, content: string, contentType: ContextContentType): GeneratedContextMetadata['compressed'] {
+  const base = {
     brief: trimText(summary || content, 350),
     medium: trimText(summary ? `${summary}\n\n${content}` : content, 1600),
     detailed: trimText(content, 4200),
     updatedAt: Date.now(),
   }
+  if (contentType === 'text') return base
+  try {
+    const structured = compressStructured(content, { contentType, queryTerms: [] })
+    if (structured.tokenEstimate < structured.originalTokens * 0.95) {
+      return { ...base, structured }
+    }
+  } catch (error) {
+    logger.error('[metadata-engine] structured compression failed:', error instanceof Error ? error.message : String(error))
+  }
+  return base
 }
 
 function splitIntoChunks(packageId: string, content: string): ContextPackageChunk[] {
@@ -203,6 +224,8 @@ export function generateContextMetadata(input: {
   const tags = TAG_RULES.filter(([, pattern]) => pattern.test(`${input.name}\n${input.description ?? ''}\n${input.content}`)).map(([tag]) => tag)
   const language = detectLanguage(input.content, relatedFiles)
   const framework = detectFramework(input.content)
+  const contentType = detectContentType(input.content)
+  const compressionProfile: ContextPackageMetadata['compressionProfile'] = contentType === 'text' ? 'none' : 'structure'
   const { summary, shortSummary } = buildSummary({
     name: input.name,
     description: input.description,
@@ -218,13 +241,15 @@ export function generateContextMetadata(input: {
     framework,
     relatedFiles,
     contentHash: hash(input.content),
-    tokenEstimate: estimateTokens(input.content),
+    tokenEstimate: estimateTokens(input.content, contentType),
     metadataVersion: METADATA_VERSION,
     generatedAt: Date.now(),
+    contentType,
+    compressionProfile,
   }
   return {
     metadata,
     chunks: splitIntoChunks(input.id ?? 'pending', input.content),
-    compressed: makeCompressed(summary, input.content),
+    compressed: makeCompressed(summary, input.content, contentType),
   }
 }

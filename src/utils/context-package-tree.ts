@@ -37,6 +37,7 @@ export function groupContextPackagesForTree(
   const global: ContextPackage[] = []
 
   for (const p of packages) {
+    if (p.archived) continue
     const r = p.workspaceRoot?.trim()
     if (!r) {
       global.push(p)

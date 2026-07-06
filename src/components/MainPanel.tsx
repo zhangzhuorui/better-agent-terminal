@@ -20,9 +20,11 @@ interface MainPanelProps {
   onClose: (id: string) => void
   onRestart: (id: string) => void
   workspaceId?: string
+  endSummaryRequest?: { nonce: number; reason: 'close' } | null
+  onEndSummaryRequestDone?: (sessionId: string, action: 'close' | 'cancel') => void
 }
 
-export const MainPanel = memo(function MainPanel({ terminal, isActive, onClose, onRestart, workspaceId }: Readonly<MainPanelProps>) {
+export const MainPanel = memo(function MainPanel({ terminal, isActive, onClose, onRestart, workspaceId, endSummaryRequest, onEndSummaryRequestDone }: Readonly<MainPanelProps>) {
   const isAgent = terminal.agentPreset && terminal.agentPreset !== 'none'
   const isSdk = terminal.agentPreset ? isSdkAgent(terminal.agentPreset) : false
   const isCli = terminal.agentPreset ? isCliAgent(terminal.agentPreset) : false
@@ -107,6 +109,8 @@ export const MainPanel = memo(function MainPanel({ terminal, isActive, onClose, 
               cwd={terminal.cwd}
               isActive={isActive}
               workspaceId={workspaceId}
+              endSummaryRequest={endSummaryRequest}
+              onEndSummaryRequestDone={onEndSummaryRequestDone}
             />
           </Suspense>
         ) : builtinMode && terminal.agentPreset ? (
